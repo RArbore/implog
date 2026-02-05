@@ -23,7 +23,7 @@ Literal: LiteralAST = {
 }
 
 Atom: AtomAST = {
-    <relation:Symbol> "(" <terms:Term*> ")" => AtomAST { relation, terms },
+    <relation:Symbol> "(" <terms:List<Term>> ")" => AtomAST { relation, terms },
 }
 
 Term: TermAST = {

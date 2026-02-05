@@ -1,3 +1,6 @@
+use core::iter::once;
+use std::collections::BTreeSet;
+
 use string_interner::StringInterner;
 use string_interner::backend::StringBackend;
 use string_interner::symbol::SymbolU16;
@@ -35,4 +38,85 @@ pub struct AtomAST {
 pub enum TermAST {
     Variable(Symbol),
     Constant(Value),
+}
+
+pub fn check_range_restricted(stmt: StatementAST) -> bool {
+    let body = match &stmt {
+        StatementAST::Rule(rule) => &rule.body,
+        StatementAST::Question(body) => body,
+    };
+    let range = collect_variable_range(body);
+
+    if let StatementAST::Rule(rule) = &stmt {
+        let mut atoms = once(&rule.head.rhs).chain(rule.head.lhs.iter());
+        if !atoms.all(|atom| is_range_restricted(atom, &range)) {
+            return false;
+        }
+    }
+    for literal in body {
+        if !literal
+            .lhs
+            .iter()
+            .all(|atom| is_range_restricted(atom, &range))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn collect_variable_range(body: &[LiteralAST]) -> BTreeSet<Symbol> {
+    let mut symbols = BTreeSet::new();
+    for literal in body {
+        for term in &literal.rhs.terms {
+            if let TermAST::Variable(symbol) = term {
+                symbols.insert(*symbol);
+            }
+        }
+    }
+    symbols
+}
+
+fn is_range_restricted(atom: &AtomAST, range: &BTreeSet<Symbol>) -> bool {
+    for term in &atom.terms {
+        if let TermAST::Variable(symbol) = term
+            && !range.contains(symbol)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::grammar::StatementParser;
+
+    use super::*;
+
+    #[test]
+    fn test_range_restricted() {
+        let range_restricted = [
+            "? .",
+            "? A(x, y), B(y, z).",
+            "? C(x, y, z) -> A(x, y), B(y, z).",
+            "C(x, y, z) :- A(x, y), B(y, z).",
+            "D(y) -> C(x, z) :- A(x, y), B(y, z).",
+        ];
+        let not_range_restricted = [
+            "? C(x, y, z) -> A(x, y).",
+            "C(x, y, z) :- A(x, y).",
+            "D(y, w) -> C(x, z) :- A(x, y), B(y, z).",
+        ];
+        let mut interner = NameInterner::new();
+
+        for stmt in &range_restricted {
+            let stmt = StatementParser::new().parse(&mut interner, stmt).unwrap();
+            assert!(check_range_restricted(stmt));
+        }
+        for stmt in &not_range_restricted {
+            let stmt = StatementParser::new().parse(&mut interner, stmt).unwrap();
+            assert!(!check_range_restricted(stmt));
+        }
+    }
 }
