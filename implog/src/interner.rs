@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::cell::{Ref, RefCell};
 use core::hash::Hash;
 use core::marker::PhantomData;
 use std::collections::HashMap;
@@ -78,7 +78,7 @@ impl<T: Clone + PartialEq + Eq + Hash> Interner<T> {
         }
     }
 
-    pub fn get(&self, id: InternId<T>) -> T {
-        self.id_to_obj.borrow()[id.id as usize].clone()
+    pub fn get(&self, id: InternId<T>) -> Ref<'_, T> {
+        Ref::map(self.id_to_obj.borrow(), |v| &v[id.id as usize])
     }
 }

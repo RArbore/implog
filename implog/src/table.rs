@@ -40,7 +40,7 @@ struct TableRows<'a> {
 fn hash(determinant: &[Value]) -> HashCode {
     let mut hasher = FxHasher::default();
     for val in determinant {
-        hasher.write_u32(val.0);
+        hasher.write_u32(*val);
     }
     hasher.finish()
 }
