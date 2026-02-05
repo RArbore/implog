@@ -18,7 +18,7 @@ struct TableEntry {
 }
 
 #[derive(Debug)]
-struct Rows {
+pub struct Rows {
     buffer: Vec<Value>,
     num_determinant: usize,
 }
@@ -28,6 +28,7 @@ pub struct Table {
     rows: Rows,
     table: HashTable<TableEntry>,
     deleted_rows: BTreeSet<RowId>,
+    delta: RowId,
 }
 
 #[derive(Debug)]
@@ -46,24 +47,27 @@ fn hash(determinant: &[Value]) -> HashCode {
 }
 
 impl Rows {
-    fn num_rows(&self) -> RowId {
+    pub fn new(num_determinant: usize) -> Self {
+        Rows {
+            buffer: vec![],
+            num_determinant,
+        }
+    }
+
+    pub fn num_rows(&self) -> RowId {
         let num_columns = self.num_determinant + 1;
         (self.buffer.len() / num_columns) as RowId
     }
 
-    fn get_row(&self, row: RowId) -> &[Value] {
+    pub fn get_row(&self, row: RowId) -> &[Value] {
         let num_columns = self.num_determinant + 1;
         let start = (row as usize) * num_columns;
         &self.buffer[start..start + num_columns]
     }
 
-    fn get_row_mut(&mut self, row: RowId) -> &mut [Value] {
+    pub fn add_row(&mut self, row: &[Value]) -> RowId {
         let num_columns = self.num_determinant + 1;
-        let start = (row as usize) * num_columns;
-        &mut self.buffer[start..start + num_columns]
-    }
-
-    fn add_row(&mut self, row: &[Value]) -> RowId {
+        assert_eq!(row.len(), num_columns);
         let row_id = self.num_rows();
         self.buffer.extend(row);
         row_id
@@ -79,11 +83,16 @@ impl Table {
             },
             table: HashTable::new(),
             deleted_rows: BTreeSet::new(),
+            delta: 0,
         }
     }
 
     pub fn num_determinant(&self) -> usize {
         self.rows.num_determinant
+    }
+
+    pub fn mark_delta(&mut self) {
+        self.delta = self.rows.num_rows();
     }
 
     pub fn insert<'a, M>(&'a mut self, row: &[Value], merge: &mut M) -> (&'a [Value], RowId)
@@ -99,21 +108,24 @@ impl Table {
             |te| te.hash == hash && &self.rows.get_row(te.row)[0..num_determinant] == determinant,
             |te| te.hash,
         );
-        match entry {
+        let vacant = match entry {
             Entry::Occupied(occupied) => {
                 let row_id = occupied.get().row;
                 let old = self.rows.get_row(row_id)[num_determinant];
                 let new = row[num_determinant];
                 let merged = merge(old, new);
-                self.rows.get_row_mut(row_id)[num_determinant] = merged;
-                (self.rows.get_row(row_id), row_id)
+                if merged == old {
+                    return (self.rows.get_row(row_id), row_id);
+                }
+                let (_, vacant) = occupied.remove();
+                self.deleted_rows.insert(row_id);
+                vacant
             }
-            Entry::Vacant(vacant) => {
-                let row_id = self.rows.add_row(row);
-                vacant.insert(TableEntry { hash, row: row_id });
-                (self.rows.get_row(row_id), row_id)
-            }
-        }
+            Entry::Vacant(vacant) => vacant,
+        };
+        let row_id = self.rows.add_row(row);
+        vacant.insert(TableEntry { hash, row: row_id });
+        (self.rows.get_row(row_id), row_id)
     }
 
     pub fn get(&self, determinant: &[Value]) -> Option<Value> {
@@ -141,16 +153,19 @@ impl Table {
         row
     }
 
-    pub fn rows(&self) -> impl Iterator<Item = (&[Value], RowId)> + '_ {
+    pub fn rows(&self, after_delta: bool) -> impl Iterator<Item = (&[Value], RowId)> + '_ {
         TableRows {
             table: self,
-            row: 0,
+            row: if after_delta { self.delta } else { 0 },
             deleted_iter: self.deleted_rows.iter().peekable(),
         }
     }
 
-    pub fn split_rows(&self) -> impl Iterator<Item = (&[Value], Value, RowId)> + '_ {
-        self.rows()
+    pub fn split_rows(
+        &self,
+        after_delta: bool,
+    ) -> impl Iterator<Item = (&[Value], Value, RowId)> + '_ {
+        self.rows(after_delta)
             .map(|(row, id)| (&row[0..row.len() - 1], row[row.len() - 1], id))
     }
 
