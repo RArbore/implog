@@ -7,16 +7,28 @@ use crate::table::RowId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LeafAssumption {
-    pub relation: Symbol,
-    pub tuple: RowId,
+    relation: Symbol,
+    tuple: RowId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DNFAssumption {
-    pub dnf: BTreeSet<BTreeSet<LeafAssumption>>,
+    dnf: BTreeSet<BTreeSet<LeafAssumption>>,
 }
 
 impl DNFAssumption {
+    pub fn zero() -> Self {
+        DNFAssumption {
+            dnf: BTreeSet::new(),
+        }
+    }
+
+    pub fn one() -> Self {
+        DNFAssumption {
+            dnf: BTreeSet::from([BTreeSet::new()]),
+        }
+    }
+    
     pub fn singleton(leaf: LeafAssumption) -> Self {
         DNFAssumption {
             dnf: BTreeSet::from([BTreeSet::from([leaf])]),

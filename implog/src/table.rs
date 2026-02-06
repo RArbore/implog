@@ -91,8 +91,16 @@ impl Table {
         self.rows.num_determinant
     }
 
+    pub fn reset_delta(&mut self) {
+        self.delta = 0;
+    }
+
     pub fn mark_delta(&mut self) {
         self.delta = self.rows.num_rows();
+    }
+
+    pub fn changed(&self) -> bool {
+        self.delta != self.rows.num_rows()
     }
 
     pub fn insert<'a, M>(&'a mut self, row: &[Value], merge: &mut M) -> (&'a [Value], RowId)
