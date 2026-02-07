@@ -58,6 +58,10 @@ impl Rows {
         (self.buffer.len() / self.num_columns) as RowId
     }
 
+    pub fn num_columns(&self) -> usize {
+        self.num_columns
+    }
+
     pub fn get_row(&self, row: RowId) -> &[Value] {
         let start = (row as usize) * self.num_columns;
         &self.buffer[start..start + self.num_columns]

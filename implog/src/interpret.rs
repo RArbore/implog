@@ -20,32 +20,39 @@ impl Environment {
     }
 
     pub fn interpret(&mut self, stmts: &[StatementAST]) {
+        let mut rules = vec![];
         for idx in 0..stmts.len() {
-            let mut rules = vec![];
             match &stmts[idx] {
                 StatementAST::Rule(rule) => {
                     for literal in once(&rule.head).chain(rule.body.iter()) {
-                        for atom in literal.lhs.iter().chain(once(&literal.rhs)) {
-                            let num_determinant = atom.terms.len();
-                            if let Some(table) = self.tables.get(&atom.relation) {
-                                assert_eq!(table.num_determinant(), num_determinant);
-                            } else {
-                                self.tables
-                                    .insert(atom.relation, Table::new(num_determinant));
-                            }
-                        }
+                        self.register_tables_for_literal(literal);
                     }
                     rules.push(rule);
                 }
                 StatementAST::Question(question) => {
-                    self.interpret_rules(rules);
+                    for literal in question {
+                        self.register_tables_for_literal(literal);
+                    }
+                    self.interpret_rules(&rules);
                     self.interpret_question(question);
                 }
             }
         }
     }
 
-    fn interpret_rules(&mut self, rules: Vec<&RuleAST>) {
+    fn register_tables_for_literal(&mut self, literal: &LiteralAST) {
+        for atom in literal.lhs.iter().chain(once(&literal.rhs)) {
+            let num_determinant = atom.terms.len();
+            if let Some(table) = self.tables.get(&atom.relation) {
+                assert_eq!(table.num_determinant(), num_determinant);
+            } else {
+                self.tables
+                    .insert(atom.relation, Table::new(num_determinant));
+            }
+        }
+    }
+
+    fn interpret_rules(&mut self, rules: &Vec<&RuleAST>) {
         for (_, table) in self.tables.iter_mut() {
             table.reset_delta();
         }
@@ -67,7 +74,7 @@ impl Environment {
             for rule_idx in 0..rules.len() {
                 let rule = &rules[rule_idx];
                 let order = &orders[rule_idx];
-                let answer = self.query(&rule.body, order);
+                let answer = self.query(&rule.body, order, true);
                 answers.push(answer);
             }
 
@@ -82,15 +89,27 @@ impl Environment {
 
                 let rhs_relation = head.rhs.relation;
                 let mut rhs_scratch_row = vec![0; head.rhs.terms.len() + 1];
-                for answer_idx in 0..answer.num_rows() {
-                    let answer = answer.get_row(answer_idx);
-                    for (term_idx, term) in head.rhs.terms.iter().enumerate() {
-                        match term {
-                            TermAST::Variable(symbol) => {
-                                rhs_scratch_row[term_idx] = answer[inv_order[symbol]]
+                if answer.num_columns() > 0 {
+                    for answer_idx in 0..answer.num_rows() {
+                        let answer = answer.get_row(answer_idx);
+                        for (term_idx, term) in head.rhs.terms.iter().enumerate() {
+                            match term {
+                                TermAST::Variable(symbol) => {
+                                    rhs_scratch_row[term_idx] = answer[inv_order[symbol]]
+                                }
+                                TermAST::Constant(value) => rhs_scratch_row[term_idx] = *value,
                             }
-                            TermAST::Constant(value) => rhs_scratch_row[term_idx] = *value,
                         }
+                        rhs_scratch_row[head.rhs.terms.len()] = one_id.into();
+                        let table = self.tables.get_mut(&rhs_relation).unwrap();
+                        table.insert(&rhs_scratch_row, &mut |_, _| one_id.into());
+                    }
+                } else {
+                    for (term_idx, term) in head.rhs.terms.iter().enumerate() {
+                        let TermAST::Constant(value) = term else {
+                            panic!()
+                        };
+                        rhs_scratch_row[term_idx] = *value;
                     }
                     rhs_scratch_row[head.rhs.terms.len()] = one_id.into();
                     let table = self.tables.get_mut(&rhs_relation).unwrap();
@@ -107,9 +126,9 @@ impl Environment {
         }
     }
 
-    fn interpret_question(&self, question: &Vec<LiteralAST>) {
+    fn interpret_question(&mut self, question: &Vec<LiteralAST>) {
         let order = Self::order(question);
-        let answer = self.query(question, &order);
+        let answer = self.query(question, &order, false);
         println!("Num answers: {}", answer.num_rows());
     }
 
@@ -127,11 +146,17 @@ impl Environment {
         order
     }
 
-    fn query(&self, query: &Vec<LiteralAST>, order: &[Symbol]) -> Rows {
+    fn query(&self, query: &Vec<LiteralAST>, order: &[Symbol], semi_naive: bool) -> Rows {
         let mut rows = Rows::new(order.len() + query.len());
-        let mut current = BTreeMap::new();
-        let mut symbol_stack = vec![];
-        self.query_helper(query, order, &mut rows, &mut current, &mut symbol_stack);
+        if semi_naive {
+            for semi_naive_idx in 0..query.len() {
+                let mut shuffled_query = query.clone();
+                shuffled_query.swap(0, semi_naive_idx);
+                self.query_helper(&shuffled_query, order, &mut rows, &BTreeMap::new(), true);
+            }
+        } else {
+            self.query_helper(query, order, &mut rows, &BTreeMap::new(), false);
+        }
         rows
     }
 
@@ -140,14 +165,16 @@ impl Environment {
         query: &[LiteralAST],
         order: &[Symbol],
         rows: &mut Rows,
-        current: &mut BTreeMap<Symbol, Value>,
-        symbol_stack: &mut Vec<Symbol>,
+        assignment: &BTreeMap<Symbol, Value>,
+        first: bool,
     ) {
         if query.is_empty() {
-            let row_id = rows.alloc_row();
-            let row = rows.get_row_mut(row_id);
-            for (idx, var) in order.into_iter().enumerate() {
-                row[idx] = current[var];
+            if rows.num_columns() > 0 {
+                let row_id = rows.alloc_row();
+                let row = rows.get_row_mut(row_id);
+                for (idx, var) in order.into_iter().enumerate() {
+                    row[idx] = assignment[var];
+                }
             }
             return;
         }
@@ -156,24 +183,17 @@ impl Environment {
         let rest = &query[1..];
         let rhs_table = &self.tables[&literal.rhs.relation];
         assert_eq!(rhs_table.num_determinant(), literal.rhs.terms.len());
-        let symbol_stack_head = symbol_stack.len();
 
-        'outer: for (row, _) in rhs_table.rows(false) {
-            for symbol_idx in symbol_stack_head..symbol_stack.len() {
-                current.remove(&symbol_stack[symbol_idx]);
-            }
-            symbol_stack.truncate(symbol_stack_head);
-
+        'outer: for (row, _) in rhs_table.rows(first) {
+            let mut new_assignment = assignment.clone();
             for col_idx in 0..rhs_table.num_determinant() {
                 let in_row = row[col_idx];
                 match literal.rhs.terms[col_idx] {
                     TermAST::Variable(var) => {
-                        if let Some(old) = current.insert(var, in_row) {
-                            if old != in_row {
-                                continue 'outer;
-                            }
-                        } else {
-                            symbol_stack.push(var);
+                        if let Some(old) = new_assignment.insert(var, in_row)
+                            && old != in_row
+                        {
+                            continue 'outer;
                         }
                     }
                     TermAST::Constant(value) => {
@@ -184,12 +204,7 @@ impl Environment {
                 }
             }
 
-            self.query_helper(rest, order, rows, current, symbol_stack);
+            self.query_helper(rest, order, rows, &new_assignment, false);
         }
-
-        for symbol_idx in symbol_stack_head..symbol_stack.len() {
-            current.remove(&symbol_stack[symbol_idx]);
-        }
-        symbol_stack.truncate(symbol_stack_head);
     }
 }
