@@ -20,7 +20,7 @@ struct TableEntry {
 #[derive(Debug)]
 pub struct Rows {
     buffer: Vec<Value>,
-    num_determinant: usize,
+    num_columns: usize,
 }
 
 #[derive(Debug)]
@@ -47,29 +47,37 @@ fn hash(determinant: &[Value]) -> HashCode {
 }
 
 impl Rows {
-    pub fn new(num_determinant: usize) -> Self {
+    pub fn new(num_columns: usize) -> Self {
         Rows {
             buffer: vec![],
-            num_determinant,
+            num_columns,
         }
     }
 
     pub fn num_rows(&self) -> RowId {
-        let num_columns = self.num_determinant + 1;
-        (self.buffer.len() / num_columns) as RowId
+        (self.buffer.len() / self.num_columns) as RowId
     }
 
     pub fn get_row(&self, row: RowId) -> &[Value] {
-        let num_columns = self.num_determinant + 1;
-        let start = (row as usize) * num_columns;
-        &self.buffer[start..start + num_columns]
+        let start = (row as usize) * self.num_columns;
+        &self.buffer[start..start + self.num_columns]
+    }
+
+    pub fn get_row_mut(&mut self, row: RowId) -> &mut [Value] {
+        let start = (row as usize) * self.num_columns;
+        &mut self.buffer[start..start + self.num_columns]
     }
 
     pub fn add_row(&mut self, row: &[Value]) -> RowId {
-        let num_columns = self.num_determinant + 1;
-        assert_eq!(row.len(), num_columns);
+        assert_eq!(row.len(), self.num_columns);
         let row_id = self.num_rows();
         self.buffer.extend(row);
+        row_id
+    }
+
+    pub fn alloc_row(&mut self) -> RowId {
+        let row_id = self.num_rows();
+        self.buffer.resize(self.buffer.len() + self.num_columns, 0);
         row_id
     }
 }
@@ -79,7 +87,7 @@ impl Table {
         Self {
             rows: Rows {
                 buffer: vec![],
-                num_determinant,
+                num_columns: num_determinant + 1,
             },
             table: HashTable::new(),
             deleted_rows: BTreeSet::new(),
@@ -88,7 +96,7 @@ impl Table {
     }
 
     pub fn num_determinant(&self) -> usize {
-        self.rows.num_determinant
+        self.rows.num_columns - 1
     }
 
     pub fn reset_delta(&mut self) {

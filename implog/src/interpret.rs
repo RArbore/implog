@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use crate::assumption::DNFAssumption;
 use crate::ast::{LiteralAST, RuleAST, StatementAST, Symbol, TermAST};
 use crate::interner::Interner;
-use crate::table::{Rows, Table};
+use crate::table::{Rows, Table, Value};
 
 pub struct Environment {
     tables: BTreeMap<Symbol, Table>,
@@ -62,7 +62,7 @@ impl Environment {
             .collect();
         let one_id = self.assumption_interner.intern(DNFAssumption::one());
 
-        loop {
+        'outer: loop {
             let mut answers = vec![];
             for rule_idx in 0..rules.len() {
                 let rule = &rules[rule_idx];
@@ -97,6 +97,13 @@ impl Environment {
                     table.insert(&rhs_scratch_row, &mut |_, _| one_id.into());
                 }
             }
+
+            for (_, table) in &self.tables {
+                if table.changed() {
+                    continue 'outer;
+                }
+            }
+            break;
         }
     }
 
@@ -121,6 +128,68 @@ impl Environment {
     }
 
     fn query(&self, query: &Vec<LiteralAST>, order: &[Symbol]) -> Rows {
-        todo!()
+        let mut rows = Rows::new(order.len() + query.len());
+        let mut current = BTreeMap::new();
+        let mut symbol_stack = vec![];
+        self.query_helper(query, order, &mut rows, &mut current, &mut symbol_stack);
+        rows
+    }
+
+    fn query_helper(
+        &self,
+        query: &[LiteralAST],
+        order: &[Symbol],
+        rows: &mut Rows,
+        current: &mut BTreeMap<Symbol, Value>,
+        symbol_stack: &mut Vec<Symbol>,
+    ) {
+        if query.is_empty() {
+            let row_id = rows.alloc_row();
+            let row = rows.get_row_mut(row_id);
+            for (idx, var) in order.into_iter().enumerate() {
+                row[idx] = current[var];
+            }
+            return;
+        }
+
+        let literal = &query[0];
+        let rest = &query[1..];
+        let rhs_table = &self.tables[&literal.rhs.relation];
+        assert_eq!(rhs_table.num_determinant(), literal.rhs.terms.len());
+        let symbol_stack_head = symbol_stack.len();
+
+        'outer: for (row, _) in rhs_table.rows(false) {
+            for symbol_idx in symbol_stack_head..symbol_stack.len() {
+                current.remove(&symbol_stack[symbol_idx]);
+            }
+            symbol_stack.truncate(symbol_stack_head);
+
+            for col_idx in 0..rhs_table.num_determinant() {
+                let in_row = row[col_idx];
+                match literal.rhs.terms[col_idx] {
+                    TermAST::Variable(var) => {
+                        if let Some(old) = current.insert(var, in_row) {
+                            if old != in_row {
+                                continue 'outer;
+                            }
+                        } else {
+                            symbol_stack.push(var);
+                        }
+                    }
+                    TermAST::Constant(value) => {
+                        if value != in_row {
+                            continue 'outer;
+                        }
+                    }
+                }
+            }
+
+            self.query_helper(rest, order, rows, current, symbol_stack);
+        }
+
+        for symbol_idx in symbol_stack_head..symbol_stack.len() {
+            current.remove(&symbol_stack[symbol_idx]);
+        }
+        symbol_stack.truncate(symbol_stack_head);
     }
 }
