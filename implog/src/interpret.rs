@@ -152,10 +152,26 @@ impl Environment {
             for semi_naive_idx in 0..query.len() {
                 let mut shuffled_query = query.clone();
                 shuffled_query.swap(0, semi_naive_idx);
-                self.query_helper(&shuffled_query, order, &mut rows, &BTreeMap::new(), true);
+                self.query_helper(
+                    &shuffled_query,
+                    order,
+                    &mut rows,
+                    &BTreeMap::new(),
+                    &mut vec![],
+                    true,
+                    semi_naive_idx,
+                );
             }
         } else {
-            self.query_helper(query, order, &mut rows, &BTreeMap::new(), false);
+            self.query_helper(
+                query,
+                order,
+                &mut rows,
+                &BTreeMap::new(),
+                &mut vec![],
+                false,
+                0,
+            );
         }
         rows
     }
@@ -166,7 +182,9 @@ impl Environment {
         order: &[Symbol],
         rows: &mut Rows,
         assignment: &BTreeMap<Symbol, Value>,
+        assumptions: &mut Vec<Value>,
         first: bool,
+        semi_naive_shuffle: usize,
     ) {
         if query.is_empty() {
             if rows.num_columns() > 0 {
@@ -174,6 +192,14 @@ impl Environment {
                 let row = rows.get_row_mut(row_id);
                 for (idx, var) in order.into_iter().enumerate() {
                     row[idx] = assignment[var];
+                }
+                row[order.len() + semi_naive_shuffle] = assumptions[0];
+                for idx in 1..assumptions.len() {
+                    if idx <= semi_naive_shuffle {
+                        row[order.len() + idx - 1] = assumptions[idx];
+                    } else {
+                        row[order.len() + idx] = assumptions[idx];
+                    }
                 }
             }
             return;
@@ -204,7 +230,17 @@ impl Environment {
                 }
             }
 
-            self.query_helper(rest, order, rows, &new_assignment, false);
+            assumptions.push(*row.last().unwrap());
+            self.query_helper(
+                rest,
+                order,
+                rows,
+                &new_assignment,
+                assumptions,
+                false,
+                semi_naive_shuffle,
+            );
+            assumptions.pop();
         }
     }
 }
