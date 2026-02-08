@@ -12,7 +12,7 @@ pub struct LeafAssumption {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DNFAssumption {
-    dnf: BTreeSet<BTreeSet<LeafAssumption>>,
+    pub dnf: BTreeSet<BTreeSet<LeafAssumption>>,
 }
 
 impl DNFAssumption {

@@ -186,11 +186,21 @@ impl Environment {
                     if literal_idx > 0 {
                         print!(", ");
                     }
-
                     let literal = &question[literal_idx];
+
+                    let lhs_assumption = self.get_head_assumption_for_answer(answer, &literal.lhs, &inv_order, &mut scratch_row);
                     scratch_row.resize(literal.rhs.terms.len(), 0);
                     Self::substitute_into_atom(&literal.rhs, answer, &inv_order, &mut scratch_row);
-                    self.print_atom(literal.rhs.relation, &scratch_row);
+                    let pre_quotient = self.tables[&literal.rhs.relation]
+                        .get(&scratch_row)
+                        .unwrap()
+                        .0;
+                    let post_quotient = self.assumption_interner.get(pre_quotient.into()).quotient(&lhs_assumption);
+                    self.print_atom(
+                        &post_quotient,
+                        literal.rhs.relation,
+                        &scratch_row,
+                    );
                 }
                 println!("");
             }
@@ -404,8 +414,34 @@ impl Environment {
         }
     }
 
-    fn print_atom(&self, relation: Symbol, tuple: &[Value]) {
-        print!("{}(", self.name_interner.resolve(relation).unwrap());
+    fn print_atom(&self, assumption: &DNFAssumption, relation: Symbol, tuple: &[Value]) {
+        if assumption.dnf.is_empty() {
+            print!("False");
+        }
+        for (conj_idx, conj) in assumption.dnf.iter().enumerate() {
+            if conj_idx > 0 {
+                print!(" + ");
+            }
+            if conj.is_empty() {
+                print!("True");
+            }
+            for (leaf_idx, leaf) in conj.iter().enumerate() {
+                if leaf_idx > 0 {
+                    print!(" * ");
+                }
+                print!("{}(", self.name_interner.resolve(leaf.relation).unwrap());
+                let tuple = self.tables[&leaf.relation].index(leaf.tuple);
+                for idx in 0..tuple.len() - 1 {
+                    if idx > 0 {
+                        print!(", ");
+                    }
+                    print!("{}", tuple[idx]);
+                }
+                print!(")")
+            }
+        }
+
+        print!(" : {}(", self.name_interner.resolve(relation).unwrap());
         for idx in 0..tuple.len() {
             if idx > 0 {
                 print!(", ");
