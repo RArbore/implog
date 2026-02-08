@@ -6,8 +6,8 @@ use crate::table::RowId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LeafAssumption {
-    relation: Symbol,
-    tuple: RowId,
+    pub relation: Symbol,
+    pub tuple: RowId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

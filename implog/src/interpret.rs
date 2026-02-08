@@ -1,7 +1,7 @@
 use core::iter::once;
 use std::collections::BTreeMap;
 
-use crate::assumption::DNFAssumption;
+use crate::assumption::{DNFAssumption, LeafAssumption};
 use crate::ast::{AtomAST, LiteralAST, RuleAST, StatementAST, Symbol, TermAST};
 use crate::interner::{InternId, Interner};
 use crate::table::{Rows, Table, Value};
@@ -9,17 +9,17 @@ use crate::table::{Rows, Table, Value};
 pub struct Environment {
     tables: BTreeMap<Symbol, Table>,
     assumption_interner: Interner<DNFAssumption>,
-    one_id: InternId<DNFAssumption>,
+    zero_id: InternId<DNFAssumption>,
 }
 
 impl Environment {
     pub fn new() -> Self {
         let assumption_interner = Interner::new();
-        let one_id = assumption_interner.intern(DNFAssumption::one());
+        let zero_id = assumption_interner.intern(DNFAssumption::zero());
         Environment {
             tables: BTreeMap::new(),
             assumption_interner,
-            one_id
+            zero_id,
         }
     }
 
@@ -71,13 +71,6 @@ impl Environment {
                     .collect()
             })
             .collect();
-        let mut merge = |a: Value, b: Value| {
-            let plus = self
-                .assumption_interner
-                .get(a.into())
-                .plus(&self.assumption_interner.get(b.into()));
-            self.assumption_interner.intern(plus).into()
-        };
         let mut lhs_scratch_row = vec![];
         let mut rhs_scratch_row = vec![];
 
@@ -110,16 +103,31 @@ impl Environment {
                             &inv_order,
                             &mut rhs_scratch_row,
                         );
-                        let assumption = self.get_assumptions_for_answer(
+                        let body_assumption = self.get_body_assumption_for_answer(
                             answer,
                             body,
                             inv_order,
                             &mut lhs_scratch_row,
                         );
+                        let head_assumption = self.get_head_assumption_for_answer(
+                            answer,
+                            &head.lhs,
+                            inv_order,
+                            &mut lhs_scratch_row,
+                        );
 
-                        rhs_scratch_row[head.rhs.terms.len()] =
-                            self.assumption_interner.intern(assumption).into();
+                        rhs_scratch_row[head.rhs.terms.len()] = self
+                            .assumption_interner
+                            .intern(body_assumption.times(&head_assumption))
+                            .into();
                         let table = self.tables.get_mut(&head.rhs.relation).unwrap();
+                        let mut merge = |a: Value, b: Value| {
+                            let plus = self
+                                .assumption_interner
+                                .get(a.into())
+                                .plus(&self.assumption_interner.get(b.into()));
+                            self.assumption_interner.intern(plus).into()
+                        };
                         table.insert(&rhs_scratch_row, &mut merge);
                     }
                 } else {
@@ -129,9 +137,23 @@ impl Environment {
                         };
                         rhs_scratch_row[term_idx] = *value;
                     }
+                    let head_assumption = self.get_head_assumption_for_answer(
+                        &[],
+                        &head.lhs,
+                        inv_order,
+                        &mut lhs_scratch_row,
+                    );
 
-                    rhs_scratch_row[head.rhs.terms.len()] = self.one_id.into();
+                    rhs_scratch_row[head.rhs.terms.len()] =
+                        self.assumption_interner.intern(head_assumption).into();
                     let table = self.tables.get_mut(&head.rhs.relation).unwrap();
+                    let mut merge = |a: Value, b: Value| {
+                        let plus = self
+                            .assumption_interner
+                            .get(a.into())
+                            .plus(&self.assumption_interner.get(b.into()));
+                        self.assumption_interner.intern(plus).into()
+                    };
                     table.insert(&rhs_scratch_row, &mut merge);
                 }
             }
@@ -179,14 +201,14 @@ impl Environment {
         }
     }
 
-    fn get_assumptions_for_answer(
+    fn get_body_assumption_for_answer(
         &self,
         answer: &[Value],
         body: &Vec<LiteralAST>,
         inv_order: &BTreeMap<Symbol, usize>,
         lhs_scratch_row: &mut Vec<Value>,
     ) -> DNFAssumption {
-        let mut assumption = self.assumption_interner.get(self.one_id.into()).clone();
+        let mut assumption = DNFAssumption::one();
         let num_literals = body.len();
         assert_eq!(inv_order.len() + num_literals, answer.len());
         for literal_idx in 0..num_literals {
@@ -209,6 +231,54 @@ impl Environment {
             assumption = assumption.times(&rhs_assumption);
         }
         assumption
+    }
+
+    fn get_head_assumption_for_answer(
+        &mut self,
+        answer: &[Value],
+        lhs_head: &Vec<AtomAST>,
+        inv_order: &BTreeMap<Symbol, usize>,
+        lhs_scratch_row: &mut Vec<Value>,
+    ) -> DNFAssumption {
+        let mut assumption = DNFAssumption::one();
+        for atom in lhs_head {
+            lhs_scratch_row.resize(atom.terms.len(), 0);
+            Self::substitute_into_atom(atom, answer, &inv_order, lhs_scratch_row);
+            if let Some((atom_assumption, _)) = self.tables[&atom.relation].get(lhs_scratch_row) {
+                assumption =
+                    assumption.times(&self.assumption_interner.get(atom_assumption.into()));
+            } else {
+                let self_assumption = self.insert_speculatively(atom.relation, lhs_scratch_row);
+                assumption = assumption.times(&self.assumption_interner.get(self_assumption));
+            }
+        }
+        assumption
+    }
+
+    fn insert_speculatively(
+        &mut self,
+        relation: Symbol,
+        scratch_row: &mut Vec<Value>,
+    ) -> InternId<DNFAssumption> {
+        let mut merge = |a: Value, b: Value| {
+            let plus = self
+                .assumption_interner
+                .get(a.into())
+                .plus(&self.assumption_interner.get(b.into()));
+            self.assumption_interner.intern(plus).into()
+        };
+
+        let table = self.tables.get_mut(&relation).unwrap();
+        scratch_row.resize(table.num_determinant() + 1, 0);
+        scratch_row[table.num_determinant()] = self.zero_id.into();
+        let (_, row_id) = table.insert(&scratch_row, &mut merge);
+        let self_assumption = DNFAssumption::singleton(LeafAssumption {
+            relation,
+            tuple: row_id,
+        });
+        let self_assumption = self.assumption_interner.intern(self_assumption);
+        scratch_row[table.num_determinant()] = self_assumption.into();
+        self_assumption
     }
 
     fn query(&self, query: &Vec<LiteralAST>, order: &[Symbol], semi_naive: bool) -> Rows {
