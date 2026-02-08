@@ -40,7 +40,7 @@ pub enum TermAST {
     Constant(Value),
 }
 
-pub fn check_range_restricted(stmt: StatementAST) -> bool {
+pub fn check_range_restricted(stmt: &StatementAST) -> bool {
     let body = match &stmt {
         StatementAST::Rule(rule) => &rule.body,
         StatementAST::Question(body) => body,
@@ -112,11 +112,11 @@ mod tests {
 
         for stmt in &range_restricted {
             let stmt = StatementParser::new().parse(&mut interner, stmt).unwrap();
-            assert!(check_range_restricted(stmt));
+            assert!(check_range_restricted(&stmt));
         }
         for stmt in &not_range_restricted {
             let stmt = StatementParser::new().parse(&mut interner, stmt).unwrap();
-            assert!(!check_range_restricted(stmt));
+            assert!(!check_range_restricted(&stmt));
         }
     }
 }

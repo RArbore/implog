@@ -2,22 +2,24 @@ use core::iter::once;
 use std::collections::BTreeMap;
 
 use crate::assumption::{DNFAssumption, LeafAssumption};
-use crate::ast::{AtomAST, LiteralAST, RuleAST, StatementAST, Symbol, TermAST};
+use crate::ast::{AtomAST, LiteralAST, NameInterner, RuleAST, StatementAST, Symbol, TermAST};
 use crate::interner::{InternId, Interner};
 use crate::table::{Rows, Table, Value};
 
 pub struct Environment {
     tables: BTreeMap<Symbol, Table>,
+    name_interner: NameInterner,
     assumption_interner: Interner<DNFAssumption>,
     zero_id: InternId<DNFAssumption>,
 }
 
 impl Environment {
-    pub fn new() -> Self {
+    pub fn new(name_interner: NameInterner) -> Self {
         let assumption_interner = Interner::new();
         let zero_id = assumption_interner.intern(DNFAssumption::zero());
         Environment {
             tables: BTreeMap::new(),
+            name_interner,
             assumption_interner,
             zero_id,
         }
@@ -169,8 +171,31 @@ impl Environment {
 
     fn interpret_question(&mut self, question: &Vec<LiteralAST>) {
         let order = Self::order(question);
+        let inv_order: BTreeMap<Symbol, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(idx, symbol)| (*symbol, idx))
+            .collect();
         let answer = self.query(question, &order, false);
-        println!("Num answers: {}", answer.num_rows());
+
+        let mut scratch_row = vec![];
+        if answer.num_columns() > 0 {
+            for answer_idx in 0..answer.num_rows() {
+                let answer = answer.get_row(answer_idx);
+                for literal_idx in 0..question.len() {
+                    if literal_idx > 0 {
+                        print!(", ");
+                    }
+
+                    let literal = &question[literal_idx];
+                    scratch_row.resize(literal.rhs.terms.len(), 0);
+                    Self::substitute_into_atom(&literal.rhs, answer, &inv_order, &mut scratch_row);
+                    self.print_atom(literal.rhs.relation, &scratch_row);
+                }
+                println!("");
+            }
+            println!("");
+        }
     }
 
     fn order(query: &Vec<LiteralAST>) -> Vec<Symbol> {
@@ -377,5 +402,16 @@ impl Environment {
             );
             assumptions.pop();
         }
+    }
+
+    fn print_atom(&self, relation: Symbol, tuple: &[Value]) {
+        print!("{}(", self.name_interner.resolve(relation).unwrap());
+        for idx in 0..tuple.len() {
+            if idx > 0 {
+                print!(", ");
+            }
+            print!("{}", tuple[idx]);
+        }
+        print!(")")
     }
 }

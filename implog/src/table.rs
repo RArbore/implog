@@ -158,6 +158,10 @@ impl Table {
         te.map(|te| (self.rows.get_row(te.row)[num_determinant], te.row))
     }
 
+    pub fn index(&self, row: RowId) -> &[Value] {
+        self.rows.get_row(row)
+    }
+
     pub fn delete(&mut self, row_id: RowId) -> &[Value] {
         let row = self.rows.get_row(row_id);
         let determinant = &row[0..self.num_determinant()];
