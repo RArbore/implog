@@ -2,20 +2,24 @@ use core::iter::once;
 use std::collections::BTreeMap;
 
 use crate::assumption::DNFAssumption;
-use crate::ast::{LiteralAST, RuleAST, StatementAST, Symbol, TermAST};
-use crate::interner::Interner;
+use crate::ast::{AtomAST, LiteralAST, RuleAST, StatementAST, Symbol, TermAST};
+use crate::interner::{InternId, Interner};
 use crate::table::{Rows, Table, Value};
 
 pub struct Environment {
     tables: BTreeMap<Symbol, Table>,
     assumption_interner: Interner<DNFAssumption>,
+    one_id: InternId<DNFAssumption>,
 }
 
 impl Environment {
     pub fn new() -> Self {
+        let assumption_interner = Interner::new();
+        let one_id = assumption_interner.intern(DNFAssumption::one());
         Environment {
             tables: BTreeMap::new(),
-            assumption_interner: Interner::new(),
+            assumption_interner,
+            one_id
         }
     }
 
@@ -67,7 +71,15 @@ impl Environment {
                     .collect()
             })
             .collect();
-        let one_id = self.assumption_interner.intern(DNFAssumption::one());
+        let mut merge = |a: Value, b: Value| {
+            let plus = self
+                .assumption_interner
+                .get(a.into())
+                .plus(&self.assumption_interner.get(b.into()));
+            self.assumption_interner.intern(plus).into()
+        };
+        let mut lhs_scratch_row = vec![];
+        let mut rhs_scratch_row = vec![];
 
         'outer: loop {
             let mut answers = vec![];
@@ -84,25 +96,31 @@ impl Environment {
 
             for rule_idx in 0..rules.len() {
                 let head = &rules[rule_idx].head;
+                let body = &rules[rule_idx].body;
                 let inv_order = &inv_orders[rule_idx];
                 let answer = &answers[rule_idx];
 
-                let rhs_relation = head.rhs.relation;
-                let mut rhs_scratch_row = vec![0; head.rhs.terms.len() + 1];
+                rhs_scratch_row.resize(head.rhs.terms.len() + 1, 0);
                 if answer.num_columns() > 0 {
                     for answer_idx in 0..answer.num_rows() {
                         let answer = answer.get_row(answer_idx);
-                        for (term_idx, term) in head.rhs.terms.iter().enumerate() {
-                            match term {
-                                TermAST::Variable(symbol) => {
-                                    rhs_scratch_row[term_idx] = answer[inv_order[symbol]]
-                                }
-                                TermAST::Constant(value) => rhs_scratch_row[term_idx] = *value,
-                            }
-                        }
-                        rhs_scratch_row[head.rhs.terms.len()] = one_id.into();
-                        let table = self.tables.get_mut(&rhs_relation).unwrap();
-                        table.insert(&rhs_scratch_row, &mut |_, _| one_id.into());
+                        Self::substitute_into_atom(
+                            &head.rhs,
+                            answer,
+                            &inv_order,
+                            &mut rhs_scratch_row,
+                        );
+                        let assumption = self.get_assumptions_for_answer(
+                            answer,
+                            body,
+                            inv_order,
+                            &mut lhs_scratch_row,
+                        );
+
+                        rhs_scratch_row[head.rhs.terms.len()] =
+                            self.assumption_interner.intern(assumption).into();
+                        let table = self.tables.get_mut(&head.rhs.relation).unwrap();
+                        table.insert(&rhs_scratch_row, &mut merge);
                     }
                 } else {
                     for (term_idx, term) in head.rhs.terms.iter().enumerate() {
@@ -111,9 +129,10 @@ impl Environment {
                         };
                         rhs_scratch_row[term_idx] = *value;
                     }
-                    rhs_scratch_row[head.rhs.terms.len()] = one_id.into();
-                    let table = self.tables.get_mut(&rhs_relation).unwrap();
-                    table.insert(&rhs_scratch_row, &mut |_, _| one_id.into());
+
+                    rhs_scratch_row[head.rhs.terms.len()] = self.one_id.into();
+                    let table = self.tables.get_mut(&head.rhs.relation).unwrap();
+                    table.insert(&rhs_scratch_row, &mut merge);
                 }
             }
 
@@ -144,6 +163,52 @@ impl Environment {
             }
         }
         order
+    }
+
+    fn substitute_into_atom(
+        atom: &AtomAST,
+        answer: &[Value],
+        inv_order: &BTreeMap<Symbol, usize>,
+        dst: &mut [Value],
+    ) {
+        for (term_idx, term) in atom.terms.iter().enumerate() {
+            match term {
+                TermAST::Variable(symbol) => dst[term_idx] = answer[inv_order[symbol]],
+                TermAST::Constant(value) => dst[term_idx] = *value,
+            }
+        }
+    }
+
+    fn get_assumptions_for_answer(
+        &self,
+        answer: &[Value],
+        body: &Vec<LiteralAST>,
+        inv_order: &BTreeMap<Symbol, usize>,
+        lhs_scratch_row: &mut Vec<Value>,
+    ) -> DNFAssumption {
+        let mut assumption = self.assumption_interner.get(self.one_id.into()).clone();
+        let num_literals = body.len();
+        assert_eq!(inv_order.len() + num_literals, answer.len());
+        for literal_idx in 0..num_literals {
+            let literal = &body[literal_idx];
+            let mut rhs_assumption = self
+                .assumption_interner
+                .get(answer[inv_order.len() + literal_idx].into())
+                .clone();
+            for assumption_idx in 0..literal.lhs.len() {
+                let lhs_atom = &literal.lhs[assumption_idx];
+                lhs_scratch_row.resize(lhs_atom.terms.len(), 0);
+                Self::substitute_into_atom(lhs_atom, answer, &inv_order, lhs_scratch_row);
+                if let Some((lhs_assumption, _)) =
+                    self.tables[&lhs_atom.relation].get(&lhs_scratch_row)
+                {
+                    rhs_assumption = rhs_assumption
+                        .quotient(&self.assumption_interner.get(lhs_assumption.into()));
+                }
+            }
+            assumption = assumption.times(&rhs_assumption);
+        }
+        assumption
     }
 
     fn query(&self, query: &Vec<LiteralAST>, order: &[Symbol], semi_naive: bool) -> Rows {

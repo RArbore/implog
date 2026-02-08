@@ -1,5 +1,4 @@
 use core::hash::Hash;
-use core::mem::take;
 use std::collections::BTreeSet;
 
 use crate::ast::Symbol;
@@ -28,7 +27,7 @@ impl DNFAssumption {
             dnf: BTreeSet::from([BTreeSet::new()]),
         }
     }
-    
+
     pub fn singleton(leaf: LeafAssumption) -> Self {
         DNFAssumption {
             dnf: BTreeSet::from([BTreeSet::from([leaf])]),
@@ -78,13 +77,16 @@ impl DNFAssumption {
         self.dnf = self.dnf.difference(&to_remove).cloned().collect();
     }
 
-    pub fn quotient(&mut self, leaf: LeafAssumption) {
-        self.dnf = take(&mut self.dnf)
-            .into_iter()
-            .map(|mut conj| {
-                conj.remove(&leaf);
-                conj
-            })
-            .collect();
+    pub fn quotient(&self, other: &Self) -> Self {
+        let mut new = DNFAssumption {
+            dnf: BTreeSet::new(),
+        };
+        for self_conj in &self.dnf {
+            for other_conj in &other.dnf {
+                new.dnf.insert(self_conj.difference(other_conj).cloned().collect());
+            }
+        }
+        new.weak_simplify();
+        new
     }
 }

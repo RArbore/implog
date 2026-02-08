@@ -148,14 +148,14 @@ impl Table {
         (self.rows.get_row(row_id), row_id)
     }
 
-    pub fn get(&self, determinant: &[Value]) -> Option<Value> {
+    pub fn get(&self, determinant: &[Value]) -> Option<(Value, RowId)> {
         let num_determinant = self.num_determinant();
         assert_eq!(determinant.len(), num_determinant);
         let hash = hash(determinant);
         let te = self.table.find(hash, |te| {
             te.hash == hash && &self.rows.get_row(te.row)[0..num_determinant] == determinant
         });
-        te.map(|te| self.rows.get_row(te.row)[num_determinant])
+        te.map(|te| (self.rows.get_row(te.row)[num_determinant], te.row))
     }
 
     pub fn delete(&mut self, row_id: RowId) -> &[Value] {
