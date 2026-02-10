@@ -1,4 +1,3 @@
-use core::iter::once;
 use std::collections::BTreeSet;
 
 use string_interner::StringInterner;
@@ -18,7 +17,8 @@ pub enum StatementAST {
 
 #[derive(Debug, Clone)]
 pub struct RuleAST {
-    pub head: LiteralAST,
+    pub head: AtomAST,
+    pub speculate: bool,
     pub body: Vec<LiteralAST>,
 }
 
@@ -48,11 +48,11 @@ pub fn check_range_restricted(stmt: &StatementAST) -> bool {
     let range = collect_variable_range(body);
 
     if let StatementAST::Rule(rule) = &stmt {
-        let mut atoms = once(&rule.head.rhs).chain(rule.head.lhs.iter());
-        if !atoms.all(|atom| is_range_restricted(atom, &range)) {
+        if !is_range_restricted(&rule.head, &range) {
             return false;
         }
     }
+
     for literal in body {
         if !literal
             .lhs

@@ -14,7 +14,8 @@ pub Statement: StatementAST = {
 }
 
 Rule: RuleAST = {
-    <head:Literal> ":-" <body:List<Literal>> "." => RuleAST { head, body },
+    <head:Atom> ":-" <body:List<Literal>> "." => RuleAST { head, speculate: false, body },
+    "[" <head:Atom> "]" ":-" <body:List<Literal>> "." => RuleAST { head, speculate: false, body },
 }
 
 Literal: LiteralAST = {
