@@ -39,10 +39,8 @@ impl Environment {
                     rules.push(rule);
                 }
                 StatementAST::Question(question) => {
-                    for literal in question {
-                        for atom in literal.lhs.iter().chain(once(&literal.rhs)) {
-                            self.register_table_for_atom(atom);
-                        }
+                    for atom in question {
+                        self.register_table_for_atom(atom);
                     }
                     self.interpret_rules(&rules);
                     self.interpret_question(question);
@@ -65,7 +63,10 @@ impl Environment {
         for (_, table) in self.tables.iter_mut() {
             table.reset_delta();
         }
-        let orders: Vec<_> = rules.iter().map(|rule| Self::order(&rule.body)).collect();
+        let orders: Vec<_> = rules
+            .iter()
+            .map(|rule| Self::order_in_literals(&rule.body))
+            .collect();
         let inv_orders: Vec<BTreeMap<Symbol, usize>> = orders
             .iter()
             .map(|order| {
@@ -84,7 +85,15 @@ impl Environment {
             for rule_idx in 0..rules.len() {
                 let rule = &rules[rule_idx];
                 let order = &orders[rule_idx];
-                let answer = self.query(&rule.body, order, true);
+                let answer = self.query(
+                    &rule
+                        .body
+                        .iter()
+                        .map(|literal| literal.rhs.clone())
+                        .collect(),
+                    order,
+                    true,
+                );
                 answers.push(answer);
             }
 
@@ -129,7 +138,7 @@ impl Environment {
                                 .plus(&self.assumption_interner.get(b.into()));
                             self.assumption_interner.intern(plus).into()
                         };
-                        table.insert(&rhs_scratch_row, &mut merge);
+                        let (_, row_id) = table.insert(&rhs_scratch_row, &mut merge);
                     }
                 }
             }
@@ -143,17 +152,50 @@ impl Environment {
         }
     }
 
-    fn interpret_question(&mut self, question: &Vec<LiteralAST>) {
-        let order = Self::order(question);
+    fn interpret_question(&mut self, question: &Vec<AtomAST>) {
+        let order = Self::order_in_atoms(question);
+        let inv_order = order
+            .iter()
+            .enumerate()
+            .map(|(idx, symbol)| (*symbol, idx))
+            .collect();
         let answer = self.query(question, &order, false);
 
-        println!("Num rows: {}", answer.num_rows());
+        let mut rhs_scratch_row = vec![];
+        for answer_idx in 0..answer.num_rows() {
+            let answer = answer.get_row(answer_idx);
+            for (atom_idx, atom) in question.iter().enumerate() {
+                if atom_idx > 0 {
+                    print!(", ");
+                }
+                rhs_scratch_row.resize(atom.terms.len(), 0);
+                Self::substitute_into_atom(atom, answer, &inv_order, &mut rhs_scratch_row);
+                let assumption = self.tables[&atom.relation].get(&rhs_scratch_row).unwrap().0;
+                let assumption = self.assumption_interner.get(assumption.into());
+                self.print_atom(&assumption, atom.relation, &rhs_scratch_row);
+            }
+            println!("");
+        }
     }
 
-    fn order(query: &Vec<LiteralAST>) -> Vec<Symbol> {
+    fn order_in_literals(query: &Vec<LiteralAST>) -> Vec<Symbol> {
         let mut order = vec![];
         for literal in query {
             for term in &literal.rhs.terms {
+                if let TermAST::Variable(symbol) = term
+                    && !order.contains(symbol)
+                {
+                    order.push(*symbol);
+                }
+            }
+        }
+        order
+    }
+
+    fn order_in_atoms(query: &Vec<AtomAST>) -> Vec<Symbol> {
+        let mut order = vec![];
+        for atom in query {
+            for term in &atom.terms {
                 if let TermAST::Variable(symbol) = term
                     && !order.contains(symbol)
                 {
@@ -237,10 +279,11 @@ impl Environment {
             .assumption_interner
             .intern(self_assumption.times(body_assumption));
         scratch_row[table.num_determinant()] = self_assumption.into();
+        table.insert(&scratch_row, &mut merge);
         self_assumption
     }
 
-    fn query(&self, query: &Vec<LiteralAST>, order: &[Symbol], semi_naive: bool) -> Rows {
+    fn query(&self, query: &Vec<AtomAST>, order: &[Symbol], semi_naive: bool) -> Rows {
         let mut rows = Rows::new(order.len() + query.len());
         if semi_naive && !query.is_empty() {
             let mut shuffled_query = query.clone();
@@ -273,7 +316,7 @@ impl Environment {
 
     fn query_helper(
         &self,
-        query: &[LiteralAST],
+        query: &[AtomAST],
         order: &[Symbol],
         rows: &mut Rows,
         assignment: &BTreeMap<Symbol, Value>,
@@ -300,16 +343,16 @@ impl Environment {
             return;
         }
 
-        let literal = &query[0];
+        let atom = &query[0];
         let rest = &query[1..];
-        let rhs_table = &self.tables[&literal.rhs.relation];
-        assert_eq!(rhs_table.num_determinant(), literal.rhs.terms.len());
+        let rhs_table = &self.tables[&atom.relation];
+        assert_eq!(rhs_table.num_determinant(), atom.terms.len());
 
         'outer: for (row, _) in rhs_table.rows(first) {
             let mut new_assignment = assignment.clone();
             for col_idx in 0..rhs_table.num_determinant() {
                 let in_row = row[col_idx];
-                match literal.rhs.terms[col_idx] {
+                match atom.terms[col_idx] {
                     TermAST::Variable(var) => {
                         if let Some(old) = new_assignment.insert(var, in_row)
                             && old != in_row

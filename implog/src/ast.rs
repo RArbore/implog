@@ -12,7 +12,7 @@ pub type NameInterner = StringInterner<StringBackend<Symbol>>;
 #[derive(Debug, Clone)]
 pub enum StatementAST {
     Rule(RuleAST),
-    Question(Vec<LiteralAST>),
+    Question(Vec<AtomAST>),
 }
 
 #[derive(Debug, Clone)]
@@ -41,34 +41,46 @@ pub enum TermAST {
 }
 
 pub fn check_range_restricted(stmt: &StatementAST) -> bool {
-    let body = match &stmt {
-        StatementAST::Rule(rule) => &rule.body,
-        StatementAST::Question(body) => body,
+    let range = match &stmt {
+        StatementAST::Rule(rule) => collect_variable_range_literals(&rule.body),
+        StatementAST::Question(body) => collect_variable_range_atoms(body),
     };
-    let range = collect_variable_range(body);
 
     if let StatementAST::Rule(rule) = &stmt {
         if !is_range_restricted(&rule.head, &range) {
             return false;
         }
-    }
 
-    for literal in body {
-        if !literal
-            .lhs
-            .iter()
-            .all(|atom| is_range_restricted(atom, &range))
-        {
-            return false;
+        for literal in &rule.body {
+            if !literal
+                .lhs
+                .iter()
+                .all(|atom| is_range_restricted(atom, &range))
+            {
+                return false;
+            }
         }
     }
+
     true
 }
 
-fn collect_variable_range(body: &[LiteralAST]) -> BTreeSet<Symbol> {
+fn collect_variable_range_literals(body: &[LiteralAST]) -> BTreeSet<Symbol> {
     let mut symbols = BTreeSet::new();
     for literal in body {
         for term in &literal.rhs.terms {
+            if let TermAST::Variable(symbol) = term {
+                symbols.insert(*symbol);
+            }
+        }
+    }
+    symbols
+}
+
+fn collect_variable_range_atoms(body: &[AtomAST]) -> BTreeSet<Symbol> {
+    let mut symbols = BTreeSet::new();
+    for atom in body {
+        for term in &atom.terms {
             if let TermAST::Variable(symbol) = term {
                 symbols.insert(*symbol);
             }

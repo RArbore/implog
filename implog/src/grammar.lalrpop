@@ -10,12 +10,12 @@ pub Program: Vec<StatementAST> = {
 
 pub Statement: StatementAST = {
     Rule => StatementAST::Rule(<>),
-    "?" <List<Literal>> "." => StatementAST::Question(<>),
+    "?" <List<Atom>> "." => StatementAST::Question(<>),
 }
 
 Rule: RuleAST = {
     <head:Atom> ":-" <body:List<Literal>> "." => RuleAST { head, speculate: false, body },
-    "[" <head:Atom> "]" ":-" <body:List<Literal>> "." => RuleAST { head, speculate: false, body },
+    "[" <head:Atom> "]" ":-" <body:List<Literal>> "." => RuleAST { head, speculate: true, body },
 }
 
 Literal: LiteralAST = {
