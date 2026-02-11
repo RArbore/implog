@@ -25,7 +25,7 @@ pub struct Rows {
 }
 
 #[derive(Debug)]
-pub struct Table {
+pub struct MapTable {
     rows: Rows,
     table: HashTable<TableEntry>,
     deleted_rows: BTreeSet<RowId>,
@@ -33,8 +33,23 @@ pub struct Table {
 }
 
 #[derive(Debug)]
-struct TableRows<'a> {
-    table: &'a Table,
+struct MapTableRows<'a> {
+    table: &'a MapTable,
+    row: RowId,
+    deleted_iter: Peekable<Iter<'a, RowId>>,
+}
+
+#[derive(Debug)]
+pub struct SetTable {
+    rows: Rows,
+    table: HashTable<TableEntry>,
+    deleted_rows: BTreeSet<RowId>,
+    delta: RowId,
+}
+
+#[derive(Debug)]
+struct SetTableRows<'a> {
+    table: &'a SetTable,
     row: RowId,
     deleted_iter: Peekable<Iter<'a, RowId>>,
 }
@@ -92,14 +107,10 @@ impl Rows {
     }
 }
 
-impl Table {
+impl MapTable {
     pub fn new(num_determinant: usize) -> Self {
         Self {
-            rows: Rows {
-                buffer: vec![],
-                num_columns: num_determinant + 1,
-                num_rows: 0,
-            },
+            rows: Rows::new(num_determinant + 1),
             table: HashTable::new(),
             deleted_rows: BTreeSet::new(),
             delta: 0,
@@ -159,10 +170,10 @@ impl Table {
         let num_determinant = self.num_determinant();
         assert_eq!(determinant.len(), num_determinant);
         let hash = hash(determinant);
-        let te = self.table.find(hash, |te| {
+        let entry = self.table.find(hash, |te| {
             te.hash == hash && &self.rows.get_row(te.row)[0..num_determinant] == determinant
         });
-        te.map(|te| (self.rows.get_row(te.row)[num_determinant], te.row))
+        entry.map(|te| (self.rows.get_row(te.row)[num_determinant], te.row))
     }
 
     pub fn index(&self, row: RowId) -> &[Value] {
@@ -185,7 +196,7 @@ impl Table {
     }
 
     pub fn rows(&self, after_delta: bool) -> impl Iterator<Item = (&[Value], RowId)> + '_ {
-        TableRows {
+        MapTableRows {
             table: self,
             row: if after_delta { self.delta } else { 0 },
             deleted_iter: self.deleted_rows.iter().peekable(),
@@ -205,7 +216,124 @@ impl Table {
     }
 }
 
-impl<'a> Iterator for TableRows<'a> {
+impl SetTable {
+    pub fn new(num_columns: usize) -> Self {
+        Self {
+            rows: Rows::new(num_columns),
+            table: HashTable::new(),
+            deleted_rows: BTreeSet::new(),
+            delta: 0,
+        }
+    }
+
+    pub fn num_columns(&self) -> usize {
+        self.rows.num_columns
+    }
+
+    pub fn reset_delta(&mut self) {
+        self.delta = 0;
+    }
+
+    pub fn mark_delta(&mut self) {
+        self.delta = self.rows.num_rows();
+    }
+
+    pub fn changed(&self) -> bool {
+        self.delta != self.rows.num_rows()
+    }
+
+    pub fn insert(&mut self, row: &[Value]) -> RowId {
+        let num_columns = self.num_columns();
+        assert_eq!(row.len(), num_columns);
+        let hash = hash(row);
+        let entry = self.table.entry(
+            hash,
+            |te| te.hash == hash && self.rows.get_row(te.row) == row,
+            |te| te.hash,
+        );
+        match entry {
+            Entry::Occupied(occupied) => occupied.get().row,
+            Entry::Vacant(vacant) => {
+                let row_id = self.rows.add_row(row);
+                vacant.insert(TableEntry { hash, row: row_id });
+                row_id
+            }
+        }
+    }
+
+    pub fn get(&self, row: &[Value]) -> Option<RowId> {
+        let num_columns = self.num_columns();
+        assert_eq!(row.len(), num_columns);
+        let hash = hash(row);
+        let entry = self.table.find(hash, |te| {
+            te.hash == hash && self.rows.get_row(te.row) == row
+        });
+        entry.map(|te| te.row)
+    }
+
+    pub fn index(&self, row: RowId) -> &[Value] {
+        self.rows.get_row(row)
+    }
+
+    pub fn delete(&mut self, row_id: RowId) -> &[Value] {
+        let row = self.rows.get_row(row_id);
+        let hash = hash(row);
+        let entry = self
+            .table
+            .entry(hash, |te| te.hash == hash && te.row == row_id, |te| te.hash);
+        let Entry::Occupied(occupied) = entry else {
+            panic!();
+        };
+        occupied.remove();
+        self.deleted_rows.insert(row_id);
+        row
+    }
+
+    pub fn rows(&self, after_delta: bool) -> impl Iterator<Item = (&[Value], RowId)> + '_ {
+        SetTableRows {
+            table: self,
+            row: if after_delta { self.delta } else { 0 },
+            deleted_iter: self.deleted_rows.iter().peekable(),
+        }
+    }
+
+    pub fn split_rows(
+        &self,
+        after_delta: bool,
+    ) -> impl Iterator<Item = (&[Value], Value, RowId)> + '_ {
+        self.rows(after_delta)
+            .map(|(row, id)| (&row[0..row.len() - 1], row[row.len() - 1], id))
+    }
+
+    pub fn num_rows(&self) -> RowId {
+        self.rows.num_rows() - self.deleted_rows.len() as RowId
+    }
+}
+
+impl<'a> Iterator for MapTableRows<'a> {
+    type Item = (&'a [Value], RowId);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(recent_deleted) = self.deleted_iter.peek() {
+            if **recent_deleted > self.row {
+                break;
+            } else if **recent_deleted == self.row {
+                self.row += 1;
+            }
+            self.deleted_iter.next();
+        }
+
+        if self.row >= self.table.rows.num_rows() {
+            None
+        } else {
+            let row = self.row;
+            self.row += 1;
+            Some((self.table.rows.get_row(row), row))
+        }
+    }
+}
+
+impl<'a> Iterator for SetTableRows<'a> {
     type Item = (&'a [Value], RowId);
 
     fn next(&mut self) -> Option<Self::Item> {

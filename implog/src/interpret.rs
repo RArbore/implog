@@ -4,24 +4,23 @@ use std::collections::BTreeMap;
 use crate::assumption::{DNFAssumption, LeafAssumption};
 use crate::ast::{AtomAST, LiteralAST, NameInterner, RuleAST, StatementAST, Symbol, TermAST};
 use crate::interner::{InternId, Interner};
-use crate::table::{Rows, Table, Value};
+use crate::table::{MapTable, Rows, SetTable, Value};
 
 pub struct Environment {
-    tables: BTreeMap<Symbol, Table>,
+    tables: BTreeMap<Symbol, MapTable>,
+    label_makers: BTreeMap<Symbol, SetTable>,
     name_interner: NameInterner,
     assumption_interner: Interner<DNFAssumption>,
-    zero_id: InternId<DNFAssumption>,
 }
 
 impl Environment {
     pub fn new(name_interner: NameInterner) -> Self {
         let assumption_interner = Interner::new();
-        let zero_id = assumption_interner.intern(DNFAssumption::zero());
         Environment {
             tables: BTreeMap::new(),
+            label_makers: BTreeMap::new(),
             name_interner,
             assumption_interner,
-            zero_id,
         }
     }
 
@@ -55,7 +54,9 @@ impl Environment {
             assert_eq!(table.num_determinant(), num_determinant);
         } else {
             self.tables
-                .insert(atom.relation, Table::new(num_determinant));
+                .insert(atom.relation, MapTable::new(num_determinant));
+            self.label_makers
+                .insert(atom.relation, SetTable::new(num_determinant));
         }
     }
 
@@ -138,7 +139,7 @@ impl Environment {
                                 .plus(&self.assumption_interner.get(b.into()));
                             self.assumption_interner.intern(plus).into()
                         };
-                        let (_, row_id) = table.insert(&rhs_scratch_row, &mut merge);
+                        table.insert(&rhs_scratch_row, &mut merge);
                     }
                 }
             }
@@ -240,7 +241,7 @@ impl Environment {
                 let lhs_atom = &literal.lhs[assumption_idx];
                 lhs_scratch_row.resize(lhs_atom.terms.len(), 0);
                 Self::substitute_into_atom(lhs_atom, answer, &inv_order, lhs_scratch_row);
-                if let Some((_, row_id)) = self.tables[&lhs_atom.relation].get(&lhs_scratch_row) {
+                if let Some(row_id) = self.label_makers[&lhs_atom.relation].get(&lhs_scratch_row) {
                     let label = LeafAssumption {
                         relation: lhs_atom.relation,
                         tuple: row_id,
@@ -267,10 +268,9 @@ impl Environment {
             self.assumption_interner.intern(plus).into()
         };
 
+        let label_maker = self.label_makers.get_mut(&relation).unwrap();
         let table = self.tables.get_mut(&relation).unwrap();
-        scratch_row.resize(table.num_determinant() + 1, 0);
-        scratch_row[table.num_determinant()] = self.zero_id.into();
-        let (_, row_id) = table.insert(&scratch_row, &mut merge);
+        let row_id = label_maker.insert(&scratch_row[0..table.num_determinant()]);
         let self_assumption = DNFAssumption::singleton(LeafAssumption {
             relation,
             tuple: row_id,
@@ -278,6 +278,7 @@ impl Environment {
         let self_assumption = self
             .assumption_interner
             .intern(self_assumption.times(body_assumption));
+        scratch_row.resize(table.num_determinant() + 1, 0);
         scratch_row[table.num_determinant()] = self_assumption.into();
         table.insert(&scratch_row, &mut merge);
         self_assumption
