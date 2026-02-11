@@ -21,6 +21,7 @@ struct TableEntry {
 pub struct Rows {
     buffer: Vec<Value>,
     num_columns: usize,
+    num_rows: RowId,
 }
 
 #[derive(Debug)]
@@ -51,11 +52,12 @@ impl Rows {
         Rows {
             buffer: vec![],
             num_columns,
+            num_rows: 0,
         }
     }
 
     pub fn num_rows(&self) -> RowId {
-        (self.buffer.len() / self.num_columns) as RowId
+        self.num_rows
     }
 
     pub fn num_columns(&self) -> usize {
@@ -63,11 +65,13 @@ impl Rows {
     }
 
     pub fn get_row(&self, row: RowId) -> &[Value] {
+        assert!(row < self.num_rows);
         let start = (row as usize) * self.num_columns;
         &self.buffer[start..start + self.num_columns]
     }
 
     pub fn get_row_mut(&mut self, row: RowId) -> &mut [Value] {
+        assert!(row < self.num_rows);
         let start = (row as usize) * self.num_columns;
         &mut self.buffer[start..start + self.num_columns]
     }
@@ -75,12 +79,14 @@ impl Rows {
     pub fn add_row(&mut self, row: &[Value]) -> RowId {
         assert_eq!(row.len(), self.num_columns);
         let row_id = self.num_rows();
+        self.num_rows += 1;
         self.buffer.extend(row);
         row_id
     }
 
     pub fn alloc_row(&mut self) -> RowId {
         let row_id = self.num_rows();
+        self.num_rows += 1;
         self.buffer.resize(self.buffer.len() + self.num_columns, 0);
         row_id
     }
@@ -92,6 +98,7 @@ impl Table {
             rows: Rows {
                 buffer: vec![],
                 num_columns: num_determinant + 1,
+                num_rows: 0,
             },
             table: HashTable::new(),
             deleted_rows: BTreeSet::new(),
