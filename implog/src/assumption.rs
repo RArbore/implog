@@ -77,7 +77,7 @@ impl DNFAssumption {
         self.dnf = self.dnf.difference(&to_remove).cloned().collect();
     }
 
-    pub fn quotient(&self, other: &Self) -> Self {
+    pub fn discharge(&self, other: &Self) -> Self {
         let mut new = DNFAssumption {
             dnf: BTreeSet::new(),
         };

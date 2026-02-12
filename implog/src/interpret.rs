@@ -113,34 +113,19 @@ impl Environment {
                 for answer_idx in 0..answer.num_rows() {
                     let answer = answer.get_row(answer_idx);
                     Self::substitute_into_atom(&head, answer, &inv_order, &mut rhs_scratch_row);
-                    let body_assumption = self.get_body_assumption_for_answer(
+                    let body_assumption = self.answer_assumption(
                         answer,
                         body,
                         inv_order,
                         &mut lhs_scratch_row,
                     );
 
-                    if speculate {
-                        self.insert_speculatively(
-                            head.relation,
-                            &mut rhs_scratch_row,
-                            &body_assumption,
-                        );
-                    } else {
-                        rhs_scratch_row[head.terms.len()] = self
-                            .assumption_interner
-                            .intern(body_assumption.times(&body_assumption))
-                            .into();
-                        let table = self.tables.get_mut(&head.relation).unwrap();
-                        let mut merge = |a: Value, b: Value| {
-                            let plus = self
-                                .assumption_interner
-                                .get(a.into())
-                                .plus(&self.assumption_interner.get(b.into()));
-                            self.assumption_interner.intern(plus).into()
-                        };
-                        table.insert(&rhs_scratch_row, &mut merge);
-                    }
+                    self.insert(
+                        head.relation,
+                        &mut rhs_scratch_row,
+                        body_assumption,
+                        speculate,
+                    );
                 }
             }
 
@@ -221,7 +206,7 @@ impl Environment {
         }
     }
 
-    fn get_body_assumption_for_answer(
+    fn answer_assumption(
         &self,
         answer: &[Value],
         body: &Vec<LiteralAST>,
@@ -229,9 +214,8 @@ impl Environment {
         lhs_scratch_row: &mut Vec<Value>,
     ) -> DNFAssumption {
         let mut assumption = DNFAssumption::one();
-        let num_literals = body.len();
-        assert_eq!(inv_order.len() + num_literals, answer.len());
-        for literal_idx in 0..num_literals {
+        assert_eq!(inv_order.len() + body.len(), answer.len());
+        for literal_idx in 0..body.len() {
             let literal = &body[literal_idx];
             let mut rhs_assumption = self
                 .assumption_interner
@@ -246,7 +230,7 @@ impl Environment {
                         relation: lhs_atom.relation,
                         tuple: row_id,
                     };
-                    rhs_assumption = rhs_assumption.quotient(&DNFAssumption::singleton(label));
+                    rhs_assumption = rhs_assumption.discharge(&DNFAssumption::singleton(label));
                 }
             }
             assumption = assumption.times(&rhs_assumption);
@@ -254,12 +238,13 @@ impl Environment {
         assumption
     }
 
-    fn insert_speculatively(
+    fn insert(
         &mut self,
         relation: Symbol,
         scratch_row: &mut Vec<Value>,
-        body_assumption: &DNFAssumption,
-    ) -> InternId<DNFAssumption> {
+        body_assumption: DNFAssumption,
+        speculate: bool,
+    ) {
         let mut merge = |a: Value, b: Value| {
             let plus = self
                 .assumption_interner
@@ -268,20 +253,22 @@ impl Environment {
             self.assumption_interner.intern(plus).into()
         };
 
-        let label_maker = self.label_makers.get_mut(&relation).unwrap();
         let table = self.tables.get_mut(&relation).unwrap();
-        let row_id = label_maker.insert(&scratch_row[0..table.num_determinant()]);
-        let self_assumption = DNFAssumption::singleton(LeafAssumption {
-            relation,
-            tuple: row_id,
-        });
-        let self_assumption = self
-            .assumption_interner
-            .intern(self_assumption.times(body_assumption));
-        scratch_row.resize(table.num_determinant() + 1, 0);
-        scratch_row[table.num_determinant()] = self_assumption.into();
+        let assumption = if speculate {
+            let label_maker = self.label_makers.get_mut(&relation).unwrap();
+            let row_id = label_maker.insert(&scratch_row[0..table.num_determinant()]);
+            let self_assumption = DNFAssumption::singleton(LeafAssumption {
+                relation,
+                tuple: row_id,
+            });
+            self.assumption_interner
+                .intern(self_assumption.times(&body_assumption))
+        } else {
+            self.assumption_interner.intern(body_assumption)
+        };
+
+        scratch_row[table.num_determinant()] = assumption.into();
         table.insert(&scratch_row, &mut merge);
-        self_assumption
     }
 
     fn query(&self, query: &Vec<AtomAST>, order: &[Symbol], semi_naive: bool) -> Rows {
