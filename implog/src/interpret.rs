@@ -1,26 +1,24 @@
 use core::iter::once;
 use std::collections::BTreeMap;
 
-use crate::assumption::{DNFAssumption, LeafAssumption};
+use crate::assumption::{Assumption, LeafAssumption};
 use crate::ast::{AtomAST, LiteralAST, NameInterner, RuleAST, StatementAST, Symbol, TermAST};
-use crate::interner::{InternId, Interner};
 use crate::table::{MapTable, Rows, SetTable, Value};
 
-pub struct Environment {
+pub struct Environment<A: Assumption> {
     tables: BTreeMap<Symbol, MapTable>,
     label_makers: BTreeMap<Symbol, SetTable>,
     name_interner: NameInterner,
-    assumption_interner: Interner<DNFAssumption>,
+    assumption_interner: A::Interner,
 }
 
-impl Environment {
+impl<A: Assumption> Environment<A> {
     pub fn new(name_interner: NameInterner) -> Self {
-        let assumption_interner = Interner::new();
         Environment {
             tables: BTreeMap::new(),
             label_makers: BTreeMap::new(),
             name_interner,
-            assumption_interner,
+            assumption_interner: A::new_interner(),
         }
     }
 
@@ -113,12 +111,8 @@ impl Environment {
                 for answer_idx in 0..answer.num_rows() {
                     let answer = answer.get_row(answer_idx);
                     Self::substitute_into_atom(&head, answer, &inv_order, &mut rhs_scratch_row);
-                    let body_assumption = self.answer_assumption(
-                        answer,
-                        body,
-                        inv_order,
-                        &mut lhs_scratch_row,
-                    );
+                    let body_assumption =
+                        self.answer_assumption(answer, body, inv_order, &mut lhs_scratch_row);
 
                     self.insert(
                         head.relation,
@@ -157,8 +151,7 @@ impl Environment {
                 rhs_scratch_row.resize(atom.terms.len(), 0);
                 Self::substitute_into_atom(atom, answer, &inv_order, &mut rhs_scratch_row);
                 let assumption = self.tables[&atom.relation].get(&rhs_scratch_row).unwrap().0;
-                let assumption = self.assumption_interner.get(assumption.into());
-                self.print_atom(&assumption, atom.relation, &rhs_scratch_row);
+                self.print_atom(assumption.into(), atom.relation, &rhs_scratch_row);
             }
             println!("");
         }
@@ -207,20 +200,17 @@ impl Environment {
     }
 
     fn answer_assumption(
-        &self,
+        &mut self,
         answer: &[Value],
         body: &Vec<LiteralAST>,
         inv_order: &BTreeMap<Symbol, usize>,
         lhs_scratch_row: &mut Vec<Value>,
-    ) -> DNFAssumption {
-        let mut assumption = DNFAssumption::one();
+    ) -> A::Id {
+        let mut assumption = A::one(&mut self.assumption_interner);
         assert_eq!(inv_order.len() + body.len(), answer.len());
         for literal_idx in 0..body.len() {
             let literal = &body[literal_idx];
-            let mut rhs_assumption = self
-                .assumption_interner
-                .get(answer[inv_order.len() + literal_idx].into())
-                .clone();
+            let mut rhs_assumption = answer[inv_order.len() + literal_idx].into();
             for assumption_idx in 0..literal.lhs.len() {
                 let lhs_atom = &literal.lhs[assumption_idx];
                 lhs_scratch_row.resize(lhs_atom.terms.len(), 0);
@@ -230,10 +220,11 @@ impl Environment {
                         relation: lhs_atom.relation,
                         tuple: row_id,
                     };
-                    rhs_assumption = rhs_assumption.discharge(&DNFAssumption::singleton(label));
+                    rhs_assumption =
+                        A::discharge(rhs_assumption, label, &mut self.assumption_interner);
                 }
             }
-            assumption = assumption.times(&rhs_assumption);
+            assumption = A::times(assumption, rhs_assumption, &mut self.assumption_interner);
         }
         assumption
     }
@@ -242,33 +233,33 @@ impl Environment {
         &mut self,
         relation: Symbol,
         scratch_row: &mut Vec<Value>,
-        body_assumption: DNFAssumption,
+        body_assumption: A::Id,
         speculate: bool,
     ) {
-        let mut merge = |a: Value, b: Value| {
-            let plus = self
-                .assumption_interner
-                .get(a.into())
-                .plus(&self.assumption_interner.get(b.into()));
-            self.assumption_interner.intern(plus).into()
-        };
-
         let table = self.tables.get_mut(&relation).unwrap();
         let assumption = if speculate {
             let label_maker = self.label_makers.get_mut(&relation).unwrap();
             let row_id = label_maker.insert(&scratch_row[0..table.num_determinant()]);
-            let self_assumption = DNFAssumption::singleton(LeafAssumption {
-                relation,
-                tuple: row_id,
-            });
-            self.assumption_interner
-                .intern(self_assumption.times(&body_assumption))
+            let self_assumption = A::singleton(
+                LeafAssumption {
+                    relation,
+                    tuple: row_id,
+                },
+                &mut self.assumption_interner,
+            );
+            A::times(
+                self_assumption,
+                body_assumption,
+                &mut self.assumption_interner,
+            )
         } else {
-            self.assumption_interner.intern(body_assumption)
+            body_assumption
         };
 
         scratch_row[table.num_determinant()] = assumption.into();
-        table.insert(&scratch_row, &mut merge);
+        table.insert(&scratch_row, &mut |a: Value, b: Value| {
+            A::plus(a.into(), b.into(), &mut self.assumption_interner).into()
+        });
     }
 
     fn query(&self, query: &Vec<AtomAST>, order: &[Symbol], semi_naive: bool) -> Rows {
@@ -370,32 +361,18 @@ impl Environment {
         }
     }
 
-    fn print_atom(&self, assumption: &DNFAssumption, relation: Symbol, tuple: &[Value]) {
-        if assumption.dnf.is_empty() {
-            print!("False");
-        }
-        for (conj_idx, conj) in assumption.dnf.iter().enumerate() {
-            if conj_idx > 0 {
-                print!(" + ");
-            }
-            if conj.is_empty() {
-                print!("True");
-            }
-            for (leaf_idx, leaf) in conj.iter().enumerate() {
-                if leaf_idx > 0 {
-                    print!(" * ");
+    fn print_atom(&self, assumption: A::Id, relation: Symbol, tuple: &[Value]) {
+        A::print(assumption, &self.assumption_interner, |leaf| {
+            print!("{}(", self.name_interner.resolve(leaf.relation).unwrap());
+            let tuple = self.tables[&leaf.relation].index(leaf.tuple);
+            for idx in 0..tuple.len() - 1 {
+                if idx > 0 {
+                    print!(", ");
                 }
-                print!("{}(", self.name_interner.resolve(leaf.relation).unwrap());
-                let tuple = self.tables[&leaf.relation].index(leaf.tuple);
-                for idx in 0..tuple.len() - 1 {
-                    if idx > 0 {
-                        print!(", ");
-                    }
-                    print!("{}", tuple[idx]);
-                }
-                print!(")")
+                print!("{}", tuple[idx]);
             }
-        }
+            print!(")");
+        });
 
         print!(" : {}(", self.name_interner.resolve(relation).unwrap());
         for idx in 0..tuple.len() {
