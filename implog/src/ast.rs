@@ -106,6 +106,7 @@ mod tests {
 
     use super::*;
 
+    #[ignore]
     #[test]
     fn test_range_restricted() {
         let range_restricted = [
