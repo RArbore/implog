@@ -247,11 +247,24 @@ impl<A: Assumption> Environment<A> {
                 },
                 &mut self.assumption_interner,
             );
-            A::times(
-                self_assumption,
-                body_assumption,
-                &mut self.assumption_interner,
-            )
+
+            // [P] :- X.
+            //
+            // a : X
+            // -----
+            // aP : P
+            // A::times(
+            //     self_assumption,
+            //     body_assumption,
+            //     &mut self.assumption_interner,
+            // )
+
+            // [P] :- X.
+            //
+            // a : X
+            // -----
+            // P : P
+            self_assumption
         } else {
             body_assumption
         };
