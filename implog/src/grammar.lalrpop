@@ -2,39 +2,34 @@ use core::str::FromStr;
 
 use crate::ast::*;
 
-grammar(interner: &mut NameInterner);
+grammar();
 
 pub Program: Vec<StatementAST> = {
     Statement* => <>   
 }
 
-pub Statement: StatementAST = {
-    Rule => StatementAST::Rule(<>),
-    "?" <List<Atom>> "." => StatementAST::Question(<>),
-}
-
-Rule: RuleAST = {
-    <head:Atom> ":-" <body:List<Literal>> "." => RuleAST { head, speculate: false, body },
-    "[" <head:Atom> "]" ":-" <body:List<Literal>> "." => RuleAST { head, speculate: true, body },
-}
-
-Literal: LiteralAST = {
-    Atom => LiteralAST { lhs: vec![], rhs: <> },
-    <lhs:Atom*> "->" <rhs:Atom> => LiteralAST { lhs, rhs },
+Statement: StatementAST = {
+    <head:Atom> ":-" <body:List<Atom>> "." => StatementAST::Rule(head, body),
+    "?" <body:List<Atom>> "." => StatementAST::Question(body),
 }
 
 Atom: AtomAST = {
-    <relation:Symbol> "(" <terms:List<Term>> ")" => AtomAST { relation, terms },
+    Literal => AtomAST::Literal(<>),
+    "[" <lit:Literal> "]" => AtomAST::Brackets(lit),
+    <lhs:Literal> "->" <rhs:Literal> => AtomAST::Arrow(lhs, rhs),
+}
+
+Literal: LiteralAST = {
+    <relation:Iden> "(" <terms:List<Term>> ")" => LiteralAST { relation, terms },
 }
 
 Term: TermAST = {
-    Symbol => TermAST::Variable(<>),
+    Iden => TermAST::Variable(<>),
     Num => TermAST::Constant(<>),
 }
 
-Symbol: Symbol = Iden => interner.get_or_intern(<>);
-Iden: &'input str = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>;
-Num: u32 = r"[0-9]+" => u32::from_str(<>).unwrap();
+Iden: String = r"[a-zA-Z_][a-zA-Z0-9_]*" => <>.to_string();
+Num: Symbol = r"[0-9]+" => Symbol::from_str(<>).unwrap();
 
 List<T>: Vec<T> = {
     <mut v:(<T> ",")*> <e:T?> => match e {

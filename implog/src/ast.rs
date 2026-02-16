@@ -1,133 +1,249 @@
 use std::collections::BTreeSet;
 
-use string_interner::StringInterner;
-use string_interner::backend::StringBackend;
-use string_interner::symbol::SymbolU16;
+use either::Either;
 
-use crate::table::Value;
-
-pub type Symbol = SymbolU16;
-pub type NameInterner = StringInterner<StringBackend<Symbol>>;
+// Arbitrary type used for ground symbols. For now, should implement Copy.
+pub type Symbol = i64;
 
 #[derive(Debug, Clone)]
 pub enum StatementAST {
-    Rule(RuleAST),
+    Rule(AtomAST, Vec<AtomAST>),
     Question(Vec<AtomAST>),
 }
 
 #[derive(Debug, Clone)]
-pub struct RuleAST {
-    pub head: AtomAST,
-    pub speculate: bool,
-    pub body: Vec<LiteralAST>,
+pub enum AtomAST {
+    Literal(LiteralAST),
+    Brackets(LiteralAST),
+    Arrow(LiteralAST, LiteralAST),
 }
 
 #[derive(Debug, Clone)]
 pub struct LiteralAST {
-    pub lhs: Vec<AtomAST>,
-    pub rhs: AtomAST,
-}
-
-#[derive(Debug, Clone)]
-pub struct AtomAST {
-    pub relation: Symbol,
+    pub relation: String,
     pub terms: Vec<TermAST>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TermAST {
-    Variable(Symbol),
-    Constant(Value),
+    Variable(String),
+    Constant(Symbol),
 }
 
-pub fn check_range_restricted(stmt: &StatementAST) -> bool {
-    let range = match &stmt {
-        StatementAST::Rule(rule) => collect_variable_range_literals(&rule.body),
-        StatementAST::Question(body) => collect_variable_range_atoms(body),
-    };
-
-    if let StatementAST::Rule(rule) = &stmt {
-        if !is_range_restricted(&rule.head, &range) {
-            return false;
+impl StatementAST {
+    pub fn head(&self) -> Option<&AtomAST> {
+        use StatementAST::*;
+        match self {
+            Rule(head, _) => Some(head),
+            Question(_) => None,
         }
+    }
 
-        for literal in &rule.body {
-            if !literal
-                .lhs
-                .iter()
-                .all(|atom| is_range_restricted(atom, &range))
-            {
+    pub fn body(&self) -> &Vec<AtomAST> {
+        use StatementAST::*;
+        match self {
+            Rule(_, body) | Question(body) => body,
+        }
+    }
+}
+
+impl AtomAST {
+    pub fn vars(&self) -> impl Iterator<Item = &str> + '_ {
+        use AtomAST::*;
+        // Either needed since iterators are different concrete types, even if both implement the
+        // same Iterator<Item = &str> trait.
+        match self {
+            Literal(lit) | Brackets(lit) => Either::Left(lit.vars()),
+            Arrow(lit1, lit2) => Either::Right(lit1.vars().chain(lit2.vars())),
+        }
+    }
+}
+
+impl LiteralAST {
+    pub fn vars(&self) -> impl Iterator<Item = &str> + '_ {
+        self.terms.iter().filter_map(TermAST::try_var)
+    }
+}
+
+impl TermAST {
+    pub fn try_var(&self) -> Option<&str> {
+        use TermAST::*;
+        match self {
+            Variable(s) => Some(s),
+            Constant(_) => None,
+        }
+    }
+
+    pub fn try_cons(&self) -> Option<Symbol> {
+        use TermAST::*;
+        match self {
+            Variable(_) => None,
+            Constant(s) => Some(*s),
+        }
+    }
+}
+
+pub fn check(stmt: &StatementAST) -> bool {
+    use AtomAST::*;
+    // Check that a parsed statement is well formed. Just return true/false for now.
+
+    // 1. Statements must be properly range restricted. The range of a statement is the set of
+    //    variables appearing in the body as (just) literals or in the RHS literal of arrow atoms.
+    //    The set of variables in the head, in the LHS literal of arrow atoms, or in the literal of
+    //    bracket atoms must be a subset of the range.
+    let mut range = BTreeSet::new();
+    for atom in stmt.body() {
+        match atom {
+            Literal(lit) | Arrow(_, lit) => range.extend(lit.vars()),
+            Brackets(_) => {}
+        }
+    }
+
+    if let Some(head) = stmt.head()
+        && head.vars().any(|var| !range.contains(var))
+    {
+        return false;
+    }
+    for atom in stmt.body() {
+        match atom {
+            Brackets(lit) | Arrow(lit, _) if lit.vars().any(|var| !range.contains(var)) => {
                 return false;
             }
+            _ => {}
         }
     }
 
-    true
-}
-
-fn collect_variable_range_literals(body: &[LiteralAST]) -> BTreeSet<Symbol> {
-    let mut symbols = BTreeSet::new();
-    for literal in body {
-        for term in &literal.rhs.terms {
-            if let TermAST::Variable(symbol) = term {
-                symbols.insert(*symbol);
-            }
-        }
+    // 2. (TEMPORARY) no arrows in the head for now. If we have bandwidth we can implement a
+    //    transform to get rid of arrows in the head.
+    if let Some(head) = stmt.head()
+        && let Arrow(_, _) = head
+    {
+        return false;
     }
-    symbols
-}
 
-fn collect_variable_range_atoms(body: &[AtomAST]) -> BTreeSet<Symbol> {
-    let mut symbols = BTreeSet::new();
-    for atom in body {
-        for term in &atom.terms {
-            if let TermAST::Variable(symbol) = term {
-                symbols.insert(*symbol);
-            }
-        }
-    }
-    symbols
-}
-
-fn is_range_restricted(atom: &AtomAST, range: &BTreeSet<Symbol>) -> bool {
-    for term in &atom.terms {
-        if let TermAST::Variable(symbol) = term
-            && !range.contains(symbol)
-        {
-            return false;
-        }
-    }
     true
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::grammar::StatementParser;
+    use crate::grammar::ProgramParser;
 
     use super::*;
 
-    #[test]
-    fn test_range_restricted() {
-        let range_restricted = [
-            "? .",
-            "? A(x, y), B(y, z).",
-            "? A(x, y), B(y, z).",
-            "C(x, y, z) :- A(x, y), B(y, z).",
-            "[C(x, z)] :- A(x, y), B(y, z).",
-        ];
-        let not_range_restricted = [
-            "D(x) :- C(x, y, z) -> A(x, y).",
-            "C(x, y, z) :- A(x, y).",
-        ];
-        let mut interner = NameInterner::new();
+    fn parse_and_check(program: &str) {
+        let parsed = ProgramParser::new().parse(program).unwrap();
+        for stmt in parsed {
+            assert!(check(&stmt));
+        }
+    }
 
-        for stmt in &range_restricted {
-            let stmt = StatementParser::new().parse(&mut interner, stmt).unwrap();
-            assert!(check_range_restricted(&stmt));
+    fn parse_and_fail_check(program: &str) {
+        let parsed = ProgramParser::new().parse(program).unwrap();
+        for stmt in parsed {
+            assert!(!check(&stmt));
         }
-        for stmt in &not_range_restricted {
-            let stmt = StatementParser::new().parse(&mut interner, stmt).unwrap();
-            assert!(!check_range_restricted(&stmt));
-        }
+    }
+
+    #[test]
+    fn parse_and_check_path() {
+        let program = r#"
+E(1, 2) :- .
+E(2, 3) :- .
+E(3, 4) :- .
+
+? E(1, 2).
+? E(1, 4).
+
+P(x, y) :- E(x, y).
+
+? E(x, y), P(y, z).
+
+P(x, z) :- E(x, y), P(y, z).
+
+? E(x, y).
+? P(x, y).
+? P(1, 4).
+? P(4, 1).
+"#;
+        parse_and_check(&program);
+    }
+
+    #[test]
+    fn parse_and_check_basic_assume() {
+        let program = r#"
+Q() :- P().
+G() :- P() -> Q().
+X() :- .
+
+? Q().
+? G().
+? P().
+? X().
+
+[P()] :- X().
+
+? Q().
+? G().
+? P().
+? X().
+"#;
+        parse_and_check(&program);
+    }
+
+    #[test]
+    fn parse_and_check_tricky() {
+        let program = r#"
+[A()] :- .
+P() :- A().
+Q() :- A().
+G() :- P() -> Q().
+
+? A().
+? P().
+? Q().
+? G().
+
+X(a, b) :- X(a, b).
+[X(1, 2)] :- .
+Y(a, b) :- Y(b, a), Y(b, a).
+[Y(3, 4)] :- .
+
+? X(a, b).
+? Y(a, b).
+"#;
+        parse_and_check(&program);
+    }
+
+    #[test]
+    fn parse_and_fail_check_range_head() {
+        let program = r#"
+A(a, b) :- B(b).
+"#;
+        parse_and_fail_check(&program);
+    }
+
+    #[test]
+    fn parse_and_fail_check_range_bracket() {
+        let program = r#"
+A(b) :- B(b), [C(b, a)].
+"#;
+        parse_and_fail_check(&program);
+    }
+
+    #[test]
+    fn parse_and_fail_check_range_arrow() {
+        let program = r#"
+A(b) :- C(a, b) -> B(b).
+"#;
+        parse_and_fail_check(&program);
+    }
+
+    // Temporary (see check()).
+    #[test]
+    fn parse_and_fail_check_arrow_in_head() {
+        let program = r#"
+A(1) -> B(2) :- .
+"#;
+        parse_and_fail_check(&program);
     }
 }

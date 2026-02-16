@@ -164,6 +164,7 @@ dependencies = [
 name = "implog"
 version = "0.1.0"
 dependencies = [
+ "either",
  "hashbrown 0.16.1",
  "lalrpop",
  "lalrpop-util",
