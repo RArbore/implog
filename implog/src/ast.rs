@@ -106,20 +106,18 @@ mod tests {
 
     use super::*;
 
-    #[ignore]
     #[test]
     fn test_range_restricted() {
         let range_restricted = [
             "? .",
             "? A(x, y), B(y, z).",
-            "? C(x, y, z) -> A(x, y), B(y, z).",
+            "? A(x, y), B(y, z).",
             "C(x, y, z) :- A(x, y), B(y, z).",
-            "D(y) -> C(x, z) :- A(x, y), B(y, z).",
+            "[C(x, z)] :- A(x, y), B(y, z).",
         ];
         let not_range_restricted = [
-            "? C(x, y, z) -> A(x, y).",
+            "D(x) :- C(x, y, z) -> A(x, y).",
             "C(x, y, z) :- A(x, y).",
-            "D(y, w) -> C(x, z) :- A(x, y), B(y, z).",
         ];
         let mut interner = NameInterner::new();
 
