@@ -66,7 +66,9 @@ impl<A: Assumption> Environment<A> {
         }
     }
 
-    fn interpret_rules(&mut self, rules: &[(&AtomAST, &Vec<AtomAST>)]) {}
+    fn interpret_rules(&mut self, rules: &[(&AtomAST, &Vec<AtomAST>)]) {
+
+    }
 
     fn interpret_question(&mut self, question: &[AtomAST]) {}
 

@@ -13,8 +13,12 @@ pub type Table<A> = BTreeMap<GroundTuple, A>;
 // atom (a relation name + a ground tuple), and that's not an accident.
 pub type LeafAssumption = (String, GroundTuple);
 
-// Interface for assumption interface - create assumption values from 0, 1, or leaf assumptions,
-// combine them with plus and times, and discharge leaf assumptions from them.
+// Interface for assumption interface:
+// - Create assumption values from 0, 1, or a leaf assumption.
+// - Add or multiply assumption values.
+// - Discharge a leaf assumption from an assumption value.
+// - Calculate a delta value between two assumptions - given assumption values a and b, delta(a, b)
+//   computes some value c such that a + b = a + c.
 pub trait Assumption {
     fn zero() -> Self;
     fn one() -> Self;
@@ -22,10 +26,11 @@ pub trait Assumption {
     fn plus(&self, other: &Self) -> Self;
     fn times(&self, other: &Self) -> Self;
     fn discharge(&self, label: LeafAssumption) -> Self;
+    fn delta(&self, other: &Self) -> Self;
 }
 
 // NOTE: DNF is not normal w.r.t. simplification modulo the theory of the user-given rules. It is
-// enforced to be normal w.r.t. the structural properties (ACI).
+// normal w.r.t. the structural properties (ACI).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DNFAssumption {
     pub dnf: BTreeSet<BTreeSet<LeafAssumption>>,
@@ -73,9 +78,7 @@ impl Assumption for DNFAssumption {
     }
 
     fn times(&self, other: &Self) -> Self {
-        let mut new = DNFAssumption {
-            dnf: BTreeSet::new(),
-        };
+        let mut new = Self::zero();
         for self_conj in &self.dnf {
             for other_conj in &other.dnf {
                 new.dnf
@@ -87,15 +90,23 @@ impl Assumption for DNFAssumption {
     }
 
     fn discharge(&self, label: LeafAssumption) -> Self {
-        let mut new = DNFAssumption {
-            dnf: BTreeSet::new(),
-        };
+        let mut new = Self::zero();
         for self_conj in &self.dnf {
             let mut new_conj = self_conj.clone();
             new_conj.remove(&label);
             new.dnf.insert(new_conj);
         }
         new.weak_simplify();
+        new
+    }
+
+    fn delta(&self, other: &Self) -> Self {
+        let mut new = Self::zero();
+        for other_conj in &other.dnf {
+            if self.dnf.iter().all(|self_conj| !other_conj.is_superset(self_conj)) {
+                new.dnf.insert(other_conj.clone());
+            }
+        }
         new
     }
 }
@@ -163,7 +174,23 @@ mod tests {
         let a = DNFAssumption::singleton(leaf_a);
         let b = DNFAssumption::singleton(leaf_b.clone());
         let ab = a.times(&b);
+
         assert_eq!(ab.discharge(leaf_b.clone()), a);
         assert_eq!(a.discharge(leaf_b), a);
+    }
+
+    #[test]
+    fn dnf_delta() {
+        let leaf_a = ("A".to_string(), vec![]);
+        let leaf_b = ("B".to_string(), vec![]);
+
+        let zero = DNFAssumption::zero();
+        let a = DNFAssumption::singleton(leaf_a);
+        let b = DNFAssumption::singleton(leaf_b);
+        let ab = a.times(&b);
+
+        assert_eq!(ab.delta(&a), a);
+        assert_eq!(a.delta(&ab), zero);
+        assert_eq!(ab.delta(&ab), zero);
     }
 }
