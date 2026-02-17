@@ -16,7 +16,4 @@ lalrpop = "*"
 
 [dependencies]
 either = "*"
-hashbrown = "*"
 lalrpop-util = { version = "*", features = ["lexer", "unicode"] }
-rustc-hash = "*"
-string-interner = "*"

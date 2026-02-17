@@ -2,8 +2,7 @@ use std::collections::BTreeSet;
 
 use either::Either;
 
-// Arbitrary type used for ground symbols. For now, should implement Copy.
-pub type Symbol = i64;
+use crate::representation::Symbol;
 
 #[derive(Debug, Clone)]
 pub enum StatementAST {
