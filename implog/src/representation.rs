@@ -4,8 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub type Symbol = i64;
 pub type GroundTuple = Vec<Symbol>;
 
-// TODO: use (old, new) for assumption value.
-pub type Table<A> = BTreeMap<GroundTuple, A>;
+// Store assumption values per ground tuple. There are two assumption values, an "old" value and a
+// "new" value. The old value is the accumulated assumption value for this tuple from prior
+// iterations and the new value is the assumption value computed during the current iteration.
+pub type Table<A> = BTreeMap<GroundTuple, (A, A)>;
 
 // A "leaf" assumption is the label corresponding to some ground atom in some table. They are created
 // due to brackets in rules, and can be combined via plus and times. Arrows "discharge" leaf
@@ -20,6 +22,7 @@ pub type LeafAssumption = (String, GroundTuple);
 // - Calculate a delta value between two assumptions - given assumption values a and b, delta(a, b)
 //   computes some value c such that a + b = a + c.
 pub trait Assumption {
+    fn is_zero(&self) -> bool;
     fn zero() -> Self;
     fn one() -> Self;
     fn singleton(leaf: LeafAssumption) -> Self;
@@ -51,6 +54,10 @@ impl DNFAssumption {
 }
 
 impl Assumption for DNFAssumption {
+    fn is_zero(&self) -> bool {
+        self.dnf.is_empty()
+    }
+
     fn zero() -> Self {
         Self {
             dnf: BTreeSet::new(),

@@ -33,6 +33,7 @@ impl<A: Assumption> Environment<A> {
                     for atom in body {
                         self.register_table_for_atom(atom);
                     }
+                    self.clear_tables();
                     self.interpret_rules(&rules);
                     self.interpret_question(body);
                 }
@@ -66,8 +67,16 @@ impl<A: Assumption> Environment<A> {
         }
     }
 
-    fn interpret_rules(&mut self, rules: &[(&AtomAST, &Vec<AtomAST>)]) {
+    fn clear_tables(&mut self) {
+        for (_, table) in self.tables.iter_mut() {
+            table.clear();
+        }
+    }
 
+    fn interpret_rules(&mut self, rules: &[(&AtomAST, &Vec<AtomAST>)]) {
+        loop {
+
+        }
     }
 
     fn interpret_question(&mut self, question: &[AtomAST]) {}
