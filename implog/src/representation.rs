@@ -25,7 +25,7 @@ pub trait Assumption {
 }
 
 // NOTE: DNF is not normal w.r.t. simplification modulo the theory of the user-given rules. It is
-// enforced to be normal w.r.t. the structural properties (i.e. ACI) via weak_simplify().
+// enforced to be normal w.r.t. the structural properties (ACI).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DNFAssumption {
     pub dnf: BTreeSet<BTreeSet<LeafAssumption>>,
@@ -47,19 +47,19 @@ impl DNFAssumption {
 
 impl Assumption for DNFAssumption {
     fn zero() -> Self {
-        DNFAssumption {
+        Self {
             dnf: BTreeSet::new(),
         }
     }
 
     fn one() -> Self {
-        DNFAssumption {
+        Self {
             dnf: BTreeSet::from([BTreeSet::new()]),
         }
     }
 
     fn singleton(leaf: LeafAssumption) -> Self {
-        DNFAssumption {
+        Self {
             dnf: BTreeSet::from([BTreeSet::from([leaf])]),
         }
     }
@@ -97,5 +97,73 @@ impl Assumption for DNFAssumption {
         }
         new.weak_simplify();
         new
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dnf_one_zero_singleton() {
+        let leaf_a = ("A".to_string(), vec![]);
+        let leaf_b = ("B".to_string(), vec![]);
+        let leaf_a_prime = ("A".to_string(), vec![]);
+
+        let zero = DNFAssumption::zero();
+        let one = DNFAssumption::one();
+        let a = DNFAssumption::singleton(leaf_a);
+        let b = DNFAssumption::singleton(leaf_b);
+        let a_prime = DNFAssumption::singleton(leaf_a_prime);
+
+        assert_ne!(zero, one);
+        assert_ne!(zero, a);
+        assert_ne!(one, a);
+        assert_ne!(a, b);
+        assert_eq!(a, a_prime);
+    }
+
+    #[test]
+    fn dnf_plus_times() {
+        let leaf_a = ("A".to_string(), vec![]);
+        let leaf_b = ("B".to_string(), vec![]);
+        let leaf_c = ("C".to_string(), vec![]);
+
+        let zero = DNFAssumption::zero();
+        let one = DNFAssumption::one();
+        let a = DNFAssumption::singleton(leaf_a);
+        let b = DNFAssumption::singleton(leaf_b);
+        let c = DNFAssumption::singleton(leaf_c);
+
+        assert_eq!(zero.plus(&one), one);
+        assert_eq!(one.plus(&zero), one);
+        assert_eq!(zero.plus(&zero), zero);
+        assert_eq!(zero.times(&one), zero);
+        assert_eq!(one.times(&zero), zero);
+        assert_eq!(one.times(&one), one);
+
+        assert_eq!(zero.plus(&a), a);
+        assert_eq!(zero.times(&a), zero);
+        assert_eq!(one.times(&a), a);
+
+        assert_eq!(a.plus(&b), b.plus(&a));
+        assert_eq!(a.times(&b), b.times(&a));
+        assert_eq!(a.plus(&b).plus(&c), a.plus(&(b.plus(&c))));
+
+        assert_eq!(a.plus(&a), a);
+        assert_eq!(a.times(&a), a);
+        assert_eq!(a.plus(&(a.times(&b))), a);
+    }
+
+    #[test]
+    fn dnf_discharge() {
+        let leaf_a = ("A".to_string(), vec![]);
+        let leaf_b = ("B".to_string(), vec![]);
+
+        let a = DNFAssumption::singleton(leaf_a);
+        let b = DNFAssumption::singleton(leaf_b.clone());
+        let ab = a.times(&b);
+        assert_eq!(ab.discharge(leaf_b.clone()), a);
+        assert_eq!(a.discharge(leaf_b), a);
     }
 }
