@@ -21,6 +21,7 @@ Atom: AtomAST = {
 }
 
 Literal: LiteralAST = {
+    Iden => LiteralAST { relation: <>, terms: vec![] },
     <relation:Iden> "(" <terms:List<Term>> ")" => LiteralAST { relation, terms },
 }
 

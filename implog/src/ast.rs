@@ -84,6 +84,7 @@ impl TermAST {
 
 pub fn check(stmt: &StatementAST) -> bool {
     use AtomAST::*;
+    use StatementAST::*;
     // Check that a parsed statement is well formed. Just return true/false for now.
 
     // 1. Statements must be properly range restricted. The range of a statement is the set of
@@ -118,6 +119,18 @@ pub fn check(stmt: &StatementAST) -> bool {
         && let Arrow(_, _) = head
     {
         return false;
+    }
+
+    // 3. (Maybe TEMPORARY?) no brackets or arrows in the body of questions for now. We just print
+    //    ground atoms and their assumption values matching a question query, and it's not obvious
+    //    what a bracket or arrow in a question means.
+    if let Question(body) = stmt {
+        for atom in body {
+            match atom {
+                Literal(_) => {}
+                Brackets(_) | Arrow(_, _) => return false,
+            }
+        }
     }
 
     true
@@ -170,21 +183,21 @@ P(x, z) :- E(x, y), P(y, z).
     #[test]
     fn parse_and_check_basic_assume() {
         let program = r#"
-Q() :- P().
-G() :- P() -> Q().
-X() :- .
+Q :- P.
+G :- P -> Q.
+X :- .
 
-? Q().
-? G().
-? P().
-? X().
+? Q.
+? G.
+? P.
+? X.
 
-[P()] :- X().
+[P] :- X.
 
-? Q().
-? G().
-? P().
-? X().
+? Q.
+? G.
+? P.
+? X.
 "#;
         parse_and_check(&program);
     }
@@ -192,15 +205,15 @@ X() :- .
     #[test]
     fn parse_and_check_tricky() {
         let program = r#"
-[A()] :- .
-P() :- A().
-Q() :- A().
-G() :- P() -> Q().
+[A] :- .
+P :- A.
+Q :- A.
+G :- P -> Q.
 
-? A().
-? P().
-? Q().
-? G().
+? A.
+? P.
+? Q.
+? G.
 
 X(a, b) :- X(a, b).
 [X(1, 2)] :- .
@@ -242,6 +255,24 @@ A(b) :- C(a, b) -> B(b).
     fn parse_and_fail_check_arrow_in_head() {
         let program = r#"
 A(1) -> B(2) :- .
+"#;
+        parse_and_fail_check(&program);
+    }
+
+    // (Maybe) temporary (see check()).
+    #[test]
+    fn parse_and_fail_check_bracket_in_question() {
+        let program = r#"
+? [A].
+"#;
+        parse_and_fail_check(&program);
+    }
+
+    // (Maybe) temporary (see check()).
+    #[test]
+    fn parse_and_fail_check_arrow_in_question() {
+        let program = r#"
+? A -> B.
 "#;
         parse_and_fail_check(&program);
     }

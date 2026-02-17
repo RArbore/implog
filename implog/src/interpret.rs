@@ -28,14 +28,14 @@ impl<A: Assumption> Environment<A> {
                         self.register_table_for_atom(atom);
                     }
                     rules.push((head, body));
-                },
+                }
                 StatementAST::Question(body) => {
                     for atom in body {
                         self.register_table_for_atom(atom);
                     }
                     self.interpret_rules(&rules);
                     self.interpret_question(body);
-                },
+                }
             }
         }
 
@@ -66,11 +66,12 @@ impl<A: Assumption> Environment<A> {
         }
     }
 
-    fn interpret_rules(&mut self, rules: &[(&AtomAST, &Vec<AtomAST>)]) {
+    fn interpret_rules(&mut self, rules: &[(&AtomAST, &Vec<AtomAST>)]) {}
 
-    }
+    fn interpret_question(&mut self, question: &[AtomAST]) {}
 
-    fn interpret_question(&mut self, question: &[AtomAST]) {
-
+    // Queries just take a set of literals.
+    fn query(&self, query: &[LiteralAST]) -> BTreeMap<String, Vec<Symbol>> {
+        todo!()
     }
 }
